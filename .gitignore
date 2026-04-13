@@ -10,3 +10,10 @@ apikey/
 
 *.log
 *.tmp
+
+.venv/
+.venv-*/
+
+training/danzero_mvp/data/
+training/danzero_mvp/checkpoints/
+training/danzero_mvp/results/
