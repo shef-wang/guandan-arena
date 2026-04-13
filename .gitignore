@@ -1,0 +1,12 @@
+node_modules/
+dist/
+apikey/
+.DS_Store
+
+.codex-builtin-cjs/
+.codex-builtin-fast-cjs/
+.codex-runner/
+.codex-runner-cjs/
+
+*.log
+*.tmp
