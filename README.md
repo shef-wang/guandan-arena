@@ -1,69 +1,141 @@
-# Guandan Practice
+# Guandan Arena
 
-This repo is set up to ship as a public single-page web app on Vercel for one product only: `1 player vs 3 AI` using the built-in `legacy-v1` AI.
+This project is ultimately about building superhuman AI for the game of Guandan.
 
-## Current deployment model
+The working thesis for this repo is:
 
-- The React/Vite frontend is hosted by Vercel.
-- Game rules, shuffle, turn flow, and the `legacy-v1` AI all run in the user's browser.
-- The public app opens directly into the game table with no mode picker or remote model setup.
-- No server is required unless you later add accounts, cloud saves, matchmaking, or multiplayer.
+1. To build very strong Guandan agents, we need a serious competitive arena.
+2. To build that arena, we need a high-performance game engine, a usable GUI, reproducible evaluation, and support for modern models, especially open-weight/local models.
+3. To get there in practice, we are building the system in layers, starting from a playable MVP and expanding toward multi-agent evaluation and learned policies.
 
-## Deploy to Vercel
+This repository is under active development.
 
-### Option 1: Dashboard
+## Current Status
 
-1. Push this repo to GitHub.
-2. In Vercel, create a new project and import the repository.
-3. Keep the detected framework as `Vite`.
-4. Confirm these settings:
-   - Install Command: `npm install`
-   - Build Command: `npm run build`
-   - Output Directory: `dist`
-5. Deploy.
+- A public MVP is live here: [guandan-arena-sigma.vercel.app](https://guandan-arena-sigma.vercel.app/)
+- The live MVP is intentionally narrow:
+  - single-player only
+  - `1 human vs 3 built-in AI`
+  - built-in rule-based `legacy-v1` opponents
+- The broader arena, LLM competition flows, and learned-agent work are still in progress.
 
-Vercel should detect most of these automatically for this repo.
+## Project Direction
 
-### Option 2: Vercel CLI
+The end state is not just a casual card game site.
+The end state is a development and evaluation environment for strong Guandan agents.
 
-```bash
-npm install -g vercel
-vercel
-vercel --prod
-```
+That means this repo is being shaped around four pillars:
 
-Run those commands from the project root.
+- `Game engine`
+  - fast, deterministic Guandan rules and state transitions
+  - stable legal-action generation
+  - reproducible match execution
+- `GUI / product surface`
+  - a browser-based table for rapid iteration
+  - human-playable interfaces for testing game feel and correctness
+  - a path to deployable demos
+- `Arena`
+  - multi-agent match running
+  - seeded evaluation and comparison
+  - support for agent-vs-agent tournaments
+- `Learning stack`
+  - heuristic baselines
+  - open-weight / local model integration
+  - imitation learning and self-play reinforcement learning
 
-## Local checks before deploy
+## What Exists In The Repo Today
+
+### 1. Core Guandan engine
+
+The TypeScript game implementation is the foundation of the whole project.
+It handles cards, rules, legal move generation, game state updates, and result resolution.
+
+Key files:
+
+- `src/game/rules.ts`
+- `src/game/state.ts`
+- `src/game/cards.ts`
+- `src/game/types.ts`
+
+### 2. Browser GUI
+
+There is already a React/Vite frontend for interacting with the game in the browser.
+The current public deployment uses this layer to ship the single-player MVP.
+
+Key files:
+
+- `src/App.tsx`
+- `src/PracticeTable.tsx`
+- `src/table/GameTableScene.tsx`
+- `src/ui/tableWidgets.tsx`
+
+### 3. Arena / agent infrastructure
+
+The repo already contains arena-oriented code for running agent-controlled matches and experimenting with different decision systems.
+This is part of the longer path toward a real model competition environment.
+
+Key files:
+
+- `src/arena/engine.ts`
+- `src/arena/runBuiltinTournament.ts`
+- `src/arena/openrouter.ts`
+- `src/arena/runHeadlessMatch.ts`
+
+### 4. Baseline and training work
+
+The current built-in rule-based agents act as baselines.
+Alongside that, the repo contains early training infrastructure for a DanZero-style path toward learned Guandan agents.
+
+Key files and docs:
+
+- `src/game/ai.ts`
+- `docs/danzero-style-mvp-roadmap.md`
+- `training/danzero_mvp/README.md`
+- `training/danzero_mvp/train_imitation.py`
+- `training/danzero_mvp/train_ppo.py`
+
+## Why The MVP Looks Small
+
+The current Vercel deployment is deliberately much smaller than the ambition of the repo.
+
+That is by design.
+
+The MVP is there to prove and polish the lowest layer:
+
+- the game runs correctly in the browser
+- the table UI is usable
+- the engine can support a real playable product
+- the baseline AI can drive a complete game loop
+
+That playable slice is useful on its own, but it is also a stepping stone toward the larger arena and training system.
+
+## Near-Term Path
+
+The likely path forward is:
+
+1. continue improving the engine and GUI until the single-player product feels solid
+2. strengthen the arena and tournament harness for agent-vs-agent evaluation
+3. integrate stronger model-based agents, especially local/open-weight ones
+4. train and benchmark learned policies against the existing heuristic baselines
+5. iterate toward agents that materially outperform the current handcrafted bots
+
+## Running Locally
+
+This repo currently ships a Vite frontend.
 
 ```bash
 npm install
+npm run dev
+```
+
+For a production build:
+
+```bash
 npm run build
 ```
 
-The production build should emit static assets into `dist/`.
+## Repo Notes
 
-## Why this works without a backend
-
-The current practice mode already runs entirely client-side:
-
-- UI flow: `src/PracticeTable.tsx`
-- Game state transitions: `src/game/state.ts`
-- Built-in AI: `src/game/ai.ts`
-
-That means each player session uses their own device for gameplay compute, which keeps hosting simple and cheap.
-
-## When you would need a server later
-
-Add a backend only if you want features like:
-
-- login or user profiles
-- shared cloud save data
-- leaderboards
-- real-time multiplayer
-- anti-cheat or authoritative game state
-
-## Notes
-
-- The current app does not need special Vercel routing config because it serves from a single entry page and does not use URL-based client routing yet.
-- If you later add React Router or shareable in-app URLs, add an SPA fallback rewrite for Vercel at that time.
+- The live web app is only the current MVP, not the full vision of the repository.
+- The repo contains experimental and in-progress components; expect active iteration.
+- Documentation in `docs/` and `training/danzero_mvp/` is a better guide to the long-term direction than the current public demo alone.
