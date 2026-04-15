@@ -78,6 +78,99 @@ button {
   padding: 11px 18px;
 }
 
+.agent-mode-shell {
+  min-height: 100vh;
+  padding: 20px;
+  display: grid;
+  gap: 18px;
+  align-content: start;
+}
+
+.agent-mode-grid {
+  display: grid;
+  gap: 18px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.agent-mode-panel {
+  border: 1px solid rgba(214, 229, 255, 0.18);
+  border-radius: 18px;
+  padding: 18px;
+  background: rgba(7, 19, 31, 0.84);
+  box-shadow: 0 22px 40px rgba(0, 0, 0, 0.24);
+}
+
+.agent-mode-panel pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.5;
+  color: #dce9f7;
+}
+
+.agent-link-row {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.agent-form-field {
+  display: grid;
+  gap: 8px;
+}
+
+.agent-form-field input,
+.agent-mode-panel input[type='text'],
+.agent-mode-panel input[type='number'] {
+  width: 100%;
+  padding: 11px 13px;
+  border-radius: 12px;
+  border: 1px solid rgba(214, 229, 255, 0.18);
+  background: rgba(255, 255, 255, 0.04);
+  color: #f8f4ea;
+}
+
+.agent-submit-button,
+.agent-choose-button {
+  padding: 11px 16px;
+}
+
+.agent-hand-row {
+  margin: 0;
+  line-height: 1.8;
+  color: #f8f4ea;
+}
+
+.agent-actions-list {
+  display: grid;
+  gap: 10px;
+}
+
+.agent-action-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.agent-action-id {
+  color: #87d9ff;
+  word-break: break-all;
+}
+
+.muted-copy {
+  margin: 0;
+  color: rgba(236, 242, 255, 0.74);
+}
+
+.danger-copy {
+  margin: 0;
+  color: #ffb8b1;
+}
+
 .start-screen {
   width: min(100vw - 32px, 1400px);
   min-height: calc(100vh - 32px);
@@ -1896,6 +1989,10 @@ button {
     padding: 8px;
   }
 
+  .agent-mode-grid {
+    grid-template-columns: 1fr;
+  }
+
   .app-topbar,
   .table-stage,
   .table-hud,
@@ -1956,6 +2053,14 @@ button {
 @media (max-width: 860px) {
   .app-shell {
     padding: 0;
+  }
+
+  .agent-mode-shell {
+    padding: 14px;
+  }
+
+  .agent-action-row {
+    grid-template-columns: 1fr;
   }
 
   .table-stage {

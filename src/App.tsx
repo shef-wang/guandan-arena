@@ -1,6 +1,24 @@
+import { useEffect, useState } from 'react';
+
+import AgentModeScreen from './agentMode/AgentModeScreen';
 import PracticeTable from './PracticeTable';
 
 export default function App() {
+  const [pathname, setPathname] = useState(() => (typeof window === 'undefined' ? '/' : window.location.pathname));
+
+  useEffect(() => {
+    function handlePopState(): void {
+      setPathname(window.location.pathname);
+    }
+
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
+
+  if (pathname.startsWith('/agent')) {
+    return <AgentModeScreen />;
+  }
+
   return (
     <div className="app-shell">
       <header className="app-topbar">
