@@ -2,10 +2,16 @@ import { filterLegalPlays, generateAllPlays, isSpecialPlay, sameTeam, usesRankPo
 import { applyPass, applyPlay, getNextActiveSeat } from './state';
 import type { AiDecision, Card, GameState, Play, Seat, Team } from './types';
 
-export type AiProfile = 'baseline' | 'legacy-v1' | 'balanced-v2';
+export type AiProfile = 'baseline' | 'legacy-v1' | 'legacy-vR' | 'balanced-v2';
 
 interface ScoredPlay {
   play: Play;
+  score: number;
+}
+
+export interface RankedAiActionCandidate {
+  type: 'play' | 'pass';
+  play?: Play;
   score: number;
 }
 
@@ -40,6 +46,8 @@ const PLAN_SEARCH_DEPTH = 2;
 const PLAN_BRANCH_FACTOR = 5;
 const BALANCED_ROLLOUT_PLIES = 5;
 const BALANCED_BRANCH_FACTOR = 6;
+const LEGACY_VR_TOP_K = 3;
+const LEGACY_VR_RANK_WEIGHTS = [3, 2, 1] as const;
 
 export function chooseAiAction(state: GameState, seat: Seat, profile: AiProfile = 'legacy-v1'): AiDecision {
   switch (profile) {
@@ -47,6 +55,8 @@ export function chooseAiAction(state: GameState, seat: Seat, profile: AiProfile 
       return chooseBaselineAiAction(state, seat);
     case 'legacy-v1':
       return chooseLegacyV1AiAction(state, seat);
+    case 'legacy-vR':
+      return chooseLegacyVRAiAction(state, seat);
     case 'balanced-v2':
     default:
       return chooseBalancedV2AiAction(state, seat);
@@ -145,6 +155,78 @@ export function chooseLegacyV1AiAction(state: GameState, seat: Seat): AiDecision
   return { type: 'pass' };
 }
 
+export function chooseLegacyVRAiAction(state: GameState, seat: Seat): AiDecision {
+  const candidates = rankLegacyV1ActionCandidates(state, seat).slice(0, LEGACY_VR_TOP_K);
+  if (candidates.length === 0) {
+    return { type: 'pass' };
+  }
+
+  const totalWeight = candidates.reduce((sum, _candidate, index) => sum + (LEGACY_VR_RANK_WEIGHTS[index] ?? 1), 0);
+  let remaining = deterministicLegacyVRRoll(state, seat) * totalWeight;
+
+  for (let index = 0; index < candidates.length; index += 1) {
+    remaining -= LEGACY_VR_RANK_WEIGHTS[index] ?? 1;
+    if (remaining <= 0) {
+      return toAiDecision(candidates[index]);
+    }
+  }
+
+  return toAiDecision(candidates[candidates.length - 1]);
+}
+
+export function rankLegacyV1ActionCandidates(state: GameState, seat: Seat): RankedAiActionCandidate[] {
+  if (state.result || state.currentPlayer !== seat) {
+    return [];
+  }
+
+  const player = state.players[seat];
+  const legalPlays = filterLegalPlays(generateAllPlays(player.hand), state.tablePlay?.play ?? null);
+  const cache = createPlanningCache();
+
+  if (!state.tablePlay) {
+    return legalPlays
+      .map((play) => ({
+        type: 'play' as const,
+        play,
+        score: scoreLegacyLeadPlay(state, seat, play, cache),
+      }))
+      .sort((left, right) => right.score - left.score);
+  }
+
+  if (sameTeam(seat, state.tablePlay.owner)) {
+    const finishNow = legalPlays.find((play) => play.cards.length === player.hand.length);
+    const candidates: RankedAiActionCandidate[] = [
+      {
+        type: 'pass',
+        score: finishNow ? 119_000 : 120_000,
+      },
+    ];
+
+    if (finishNow) {
+      candidates.push({
+        type: 'play',
+        play: finishNow,
+        score: 120_000,
+      });
+    }
+
+    return candidates;
+  }
+
+  const candidates: RankedAiActionCandidate[] = legalPlays.map((play) => ({
+    type: 'play',
+    play,
+    score: scoreLegacyResponsePlay(state, seat, play, cache),
+  }));
+
+  candidates.push({
+    type: 'pass',
+    score: legalPlays.length === 0 ? 999_999 : scorePassAction(state, seat, cache),
+  });
+
+  return candidates.sort((left, right) => right.score - left.score);
+}
+
 export function chooseBalancedV2AiAction(state: GameState, seat: Seat): AiDecision {
   const player = state.players[seat];
   const allPlays = generateAllPlays(player.hand);
@@ -184,6 +266,36 @@ export function chooseBalancedV2AiAction(state: GameState, seat: Seat): AiDecisi
     type: 'play',
     play: best.play,
   };
+}
+
+function toAiDecision(candidate: RankedAiActionCandidate): AiDecision {
+  if (candidate.type === 'play' && candidate.play) {
+    return {
+      type: 'play',
+      play: candidate.play,
+    };
+  }
+
+  return { type: 'pass' };
+}
+
+function deterministicLegacyVRRoll(state: GameState, seat: Seat): number {
+  const snapshot = [
+    `seat=${seat}`,
+    `turn=${state.actionHistory.length}`,
+    `current=${state.currentPlayer}`,
+    `table=${state.tablePlay?.play.key ?? 'lead'}`,
+    `finish=${state.finishOrder.join(',')}`,
+    `hand=${state.players[seat].hand.map((card) => card.id).join(',')}`,
+  ].join('|');
+
+  let hash = 2166136261;
+  for (let index = 0; index < snapshot.length; index += 1) {
+    hash ^= snapshot.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+
+  return (hash >>> 0) / 4294967296;
 }
 
 function buildBalancedCandidates(state: GameState, seat: Seat, legalPlays: Play[], cache: PlanningCache): CandidateAction[] {

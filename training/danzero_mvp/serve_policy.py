@@ -5,8 +5,10 @@ import json
 import sys
 
 import torch
+import torch.nn.functional as F
 
 from policy_value_net import LegalActionPolicyValueNet
+from runtime_utils import configure_runtime, pick_device
 
 
 def load_checkpoint(path: str, device: torch.device) -> tuple[LegalActionPolicyValueNet, dict]:
@@ -23,31 +25,45 @@ def load_checkpoint(path: str, device: torch.device) -> tuple[LegalActionPolicyV
     return model, meta
 
 
-def choose_index(model: LegalActionPolicyValueNet, device: torch.device, request: dict) -> int:
+def evaluate_request(model: LegalActionPolicyValueNet, device: torch.device, request: dict) -> dict:
     state = torch.tensor(request["state_features"], dtype=torch.float32, device=device).unsqueeze(0)
     actions = torch.tensor(request["action_features"], dtype=torch.float32, device=device).unsqueeze(0)
     legal_mask = torch.ones((1, actions.shape[1]), dtype=torch.bool, device=device)
+    sample = bool(request.get("sample", False))
+    temperature = max(float(request.get("temperature", 1.0)), 1e-4)
 
     with torch.no_grad():
-      logits, _ = model(state, actions, legal_mask)
-      return int(torch.argmax(logits, dim=-1).item())
+        logits, values = model(state, actions, legal_mask)
+        logits = logits / temperature
+        log_probs = F.log_softmax(logits, dim=-1)
+        probs = torch.exp(log_probs)
+        if sample:
+            chosen_tensor = torch.distributions.Categorical(probs=probs).sample()
+        else:
+            chosen_tensor = torch.argmax(logits, dim=-1)
+
+        chosen_index = int(chosen_tensor.item())
+        return {
+            "chosen_index": chosen_index,
+            "chosen_log_prob": float(log_probs[0, chosen_index].item()),
+            "value": float(values.item()),
+            "entropy": float((-(probs * log_probs).sum(dim=-1)).item()),
+        }
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--checkpoint", required=True)
     parser.add_argument("--device", default=None)
+    parser.add_argument("--cpu-fraction", type=float, default=0.8)
+    parser.add_argument("--mps-memory-fraction", type=float, default=0.8)
     args = parser.parse_args()
 
-    if args.device:
-        device = torch.device(args.device)
-    elif torch.backends.mps.is_available():
-        device = torch.device("mps")
-    else:
-        device = torch.device("cpu")
+    device = pick_device(args.device)
+    runtime = configure_runtime(device, args.cpu_fraction, args.mps_memory_fraction)
 
     model, meta = load_checkpoint(args.checkpoint, device)
-    print(json.dumps({"ready": True, "device": str(device), "meta": meta}), flush=True)
+    print(json.dumps({"ready": True, "device": str(device), "meta": meta, "runtime": runtime}), flush=True)
 
     for raw_line in sys.stdin:
         line = raw_line.strip()
@@ -57,8 +73,8 @@ def main() -> None:
         request = json.loads(line)
         request_id = request["id"]
         try:
-            chosen_index = choose_index(model, device, request)
-            print(json.dumps({"id": request_id, "chosen_index": chosen_index}), flush=True)
+            response = evaluate_request(model, device, request)
+            print(json.dumps({"id": request_id, **response}), flush=True)
         except Exception as exc:  # pragma: no cover - CLI surface
             print(json.dumps({"id": request_id, "error": str(exc)}), flush=True)
 

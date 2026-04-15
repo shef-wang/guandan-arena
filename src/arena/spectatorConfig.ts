@@ -1,9 +1,15 @@
 import type { Seat } from '../game/types';
-import { OPENROUTER_DEFAULT_BASE_URL } from './openrouter';
+import { OPENROUTER_DEFAULT_BASE_URL, OPENROUTER_DEFAULT_RERANKER_MODEL } from './openrouter';
 
 export const LOCAL_STORAGE_KEY = 'guandan-openrouter-spectator-v1';
 
-export type SeatAgentMode = 'builtin-baseline' | 'builtin-legacy-v1' | 'builtin-balanced-v2' | 'openrouter';
+export type SeatAgentMode =
+  | 'builtin-baseline'
+  | 'builtin-legacy-v1'
+  | 'builtin-legacy-vR'
+  | 'builtin-balanced-v2'
+  | 'openrouter'
+  | 'llmreranker';
 export type SpectatorSeatConfigMap = Record<Seat, SpectatorSeatConfig>;
 
 export interface SpectatorGlobalConfig {
@@ -29,6 +35,10 @@ export interface OpenRouterModelOption {
 }
 
 export const AVAILABLE_OPENROUTER_MODELS: OpenRouterModelOption[] = [
+  {
+    value: 'moonshotai/kimi-k2.5',
+    label: 'Kimi K2.5',
+  },
   {
     value: 'google/gemma-4-26b-a4b-it',
     label: 'Gemma 4 26B A4B Instruct',
@@ -93,7 +103,9 @@ export function persistSpectatorConfig(config: SpectatorArenaConfig): void {
 }
 
 export function validateSpectatorConfig(config: SpectatorArenaConfig): string | null {
-  const openRouterSeats = ([0, 1, 2, 3] as const).filter((seat) => config.seatConfigs[seat].mode === 'openrouter');
+  const openRouterSeats = ([0, 1, 2, 3] as const).filter((seat) =>
+    config.seatConfigs[seat].mode === 'openrouter' || config.seatConfigs[seat].mode === 'llmreranker',
+  );
 
   if (openRouterSeats.length === 0) {
     return null;
@@ -105,7 +117,7 @@ export function validateSpectatorConfig(config: SpectatorArenaConfig): string | 
 
   for (const seat of openRouterSeats) {
     const seatConfig = config.seatConfigs[seat];
-    if (!seatConfig.model.trim()) {
+    if (seatConfig.mode === 'openrouter' && !seatConfig.model.trim()) {
       return `Seat ${seat} 还没有填写 model。`;
     }
 
@@ -146,6 +158,10 @@ export function getSeatDisplayLabel(config: SpectatorSeatConfig): string {
     return config.label || 'guandan-ai v2 balanced';
   }
 
+  if (config.mode === 'builtin-legacy-vR') {
+    return config.label || 'guandan-ai vR';
+  }
+
   if (config.mode === 'builtin-legacy-v1') {
     return config.label || 'guandan-ai v1';
   }
@@ -154,12 +170,20 @@ export function getSeatDisplayLabel(config: SpectatorSeatConfig): string {
     return config.label || '基础内置 heuristic';
   }
 
-  return config.label || config.model || 'OpenRouter LLM';
+  if (config.mode === 'llmreranker') {
+    return config.label || 'LLM Reranker';
+  }
+
+  return config.label || getOpenRouterModelLabel(config.model) || 'OpenRouter LLM';
 }
 
 export function getSeatSubtitle(config: SpectatorSeatConfig): string {
   if (config.mode === 'builtin-balanced-v2') {
     return `${getSeatDisplayLabel(config)} · balanced`;
+  }
+
+  if (config.mode === 'builtin-legacy-vR') {
+    return `${getSeatDisplayLabel(config)} · weighted top-5`;
   }
 
   if (config.mode === 'builtin-legacy-v1') {
@@ -170,7 +194,11 @@ export function getSeatSubtitle(config: SpectatorSeatConfig): string {
     return `${getSeatDisplayLabel(config)} · 基础启发式`;
   }
 
-  return `${getSeatDisplayLabel(config)} · ${config.model || '未设模型'}`;
+  if (config.mode === 'llmreranker') {
+    return `${getSeatDisplayLabel(config)} · ${getOpenRouterModelLabel(config.model || OPENROUTER_DEFAULT_RERANKER_MODEL)}`;
+  }
+
+  return `${getSeatDisplayLabel(config)} · ${getOpenRouterModelLabel(config.model) || '未设模型'}`;
 }
 
 export function trimEndpoint(baseUrl: string): string {
@@ -182,6 +210,10 @@ function normalizeSeatConfig(config: SpectatorSeatConfig): SpectatorSeatConfig {
     ...config,
     mode: normalizeSeatMode(config.mode),
   };
+}
+
+function getOpenRouterModelLabel(model: string): string {
+  return AVAILABLE_OPENROUTER_MODELS.find((option) => option.value === model)?.label ?? model;
 }
 
 function normalizeSeatMode(mode: SpectatorSeatConfig['mode'] | 'builtin' | 'builtin-strong'): SeatAgentMode {

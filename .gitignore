@@ -13,6 +13,8 @@ apikey/
 
 .venv/
 .venv-*/
+__pycache__/
+*.pyc
 
 training/danzero_mvp/data/
 training/danzero_mvp/checkpoints/

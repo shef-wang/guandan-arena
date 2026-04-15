@@ -4,8 +4,15 @@ import type { GameState, Seat } from '../game/types';
 import GameTableScene from '../table/GameTableScene';
 import { PlayingCard, formatPlacementKey } from '../ui/tableWidgets';
 import { createHeuristicAgent, formatTurnInputAsPrompt, GuandanArenaMatch } from './index';
-import { createOpenRouterAgent, OPENROUTER_DEFAULT_BASE_URL } from './openrouter';
-import type { SpectatorArenaConfig, SpectatorGlobalConfig, SpectatorSeatConfig, SpectatorSeatConfigMap } from './spectatorConfig';
+import {
+  createOpenRouterAgent,
+  createOpenRouterRerankerAgent,
+  OPENROUTER_DEFAULT_BASE_URL,
+  OPENROUTER_DEFAULT_RERANKER_MODEL,
+  type OpenRouterStatusCode,
+  type OpenRouterStatusEvent,
+} from './openrouter';
+import type { SpectatorArenaConfig, SpectatorGlobalConfig, SpectatorSeatConfig } from './spectatorConfig';
 import { getSeatDisplayLabel, getSeatSubtitle, getSeatTitle, trimEndpoint } from './spectatorConfig';
 
 const DEFAULT_DELAY_MS = 900;
@@ -21,21 +28,29 @@ interface ArenaLogEntry {
   summary: string;
 }
 
+interface ArenaLlmStatusEntry extends OpenRouterStatusEvent {
+  id: string;
+}
+
 export default function ArenaSpectator({ config }: { config: SpectatorArenaConfig }) {
   const [runtimeError, setRuntimeError] = useState<string | null>(null);
   const [autoRun, setAutoRun] = useState(false);
   const [isStepping, setIsStepping] = useState(false);
   const [stepDelay, setStepDelay] = useState(DEFAULT_DELAY_MS);
   const [logs, setLogs] = useState<ArenaLogEntry[]>([]);
+  const [llmStatusLog, setLlmStatusLog] = useState<ArenaLlmStatusEntry[]>([]);
+  const [llmSeatStatus, setLlmSeatStatus] = useState<Partial<Record<Seat, ArenaLlmStatusEntry>>>({});
   const [copiedPrompt, setCopiedPrompt] = useState(false);
+  const llmStatusSequenceRef = useRef(0);
 
-  const matchRef = useRef<GuandanArenaMatch>(createSpectatorMatch(config));
+  const matchRef = useRef<GuandanArenaMatch>(createSpectatorMatch(config, appendLlmStatus));
   const [game, setGame] = useState<GameState>(() => matchRef.current.getState());
+  const remoteSeats = ARENA_SEATS.filter((seat) => usesRemoteModel(config.seatConfigs[seat]));
 
   const currentInput = game.result ? null : matchRef.current.getTurnInput();
   const inspectorHandGroups = currentInput ? buildInspectorHandGroups(currentInput.hand) : [];
   const promptPreview = currentInput ? formatTurnInputAsPrompt(currentInput) : '';
-  const visibleHands = ARENA_SEATS.map((seat) => ({
+  const visibleSeats = ARENA_SEATS.map((seat) => ({
     seat,
     player: game.players[seat],
     trace: game.roundTrace[seat],
@@ -44,11 +59,13 @@ export default function ArenaSpectator({ config }: { config: SpectatorArenaConfi
   }));
 
   useEffect(() => {
-    matchRef.current = createSpectatorMatch(config);
+    matchRef.current = createSpectatorMatch(config, appendLlmStatus);
     setGame(matchRef.current.getState());
     setRuntimeError(null);
     setAutoRun(false);
     setLogs([]);
+    setLlmStatusLog([]);
+    setLlmSeatStatus({});
   }, [config]);
 
   useEffect(() => {
@@ -132,6 +149,23 @@ export default function ArenaSpectator({ config }: { config: SpectatorArenaConfi
     ]);
   }
 
+  function appendLlmStatus(entry: OpenRouterStatusEvent): void {
+    const nextEntry: ArenaLlmStatusEntry = {
+      ...entry,
+      id: `${entry.timestamp}-${llmStatusSequenceRef.current + 1}`,
+    };
+
+    llmStatusSequenceRef.current += 1;
+    setLlmStatusLog((current) => [nextEntry, ...current].slice(0, 28));
+
+    if (entry.seat !== undefined) {
+      setLlmSeatStatus((current) => ({
+        ...current,
+        [entry.seat as Seat]: nextEntry,
+      }));
+    }
+  }
+
   function handleToggleAutoRun(): void {
     if (game.result) {
       return;
@@ -141,11 +175,13 @@ export default function ArenaSpectator({ config }: { config: SpectatorArenaConfi
   }
 
   function handleRestart(): void {
-    matchRef.current = createSpectatorMatch(config);
+    matchRef.current = createSpectatorMatch(config, appendLlmStatus);
     setGame(matchRef.current.getState());
     setRuntimeError(null);
     setAutoRun(false);
     setLogs([]);
+    setLlmStatusLog([]);
+    setLlmSeatStatus({});
   }
 
   async function handleCopyPrompt(): Promise<void> {
@@ -205,23 +241,23 @@ export default function ArenaSpectator({ config }: { config: SpectatorArenaConfi
         { label: 'Endpoint', value: trimEndpoint(config.globalConfig.baseUrl) },
       ]}
       seats={[
-        { seat: 2, position: 'top', subtitle: getSeatSubtitle(config.seatConfigs[2]), openHandCards: game.players[2].hand },
-        { seat: 3, position: 'left', subtitle: getSeatSubtitle(config.seatConfigs[3]), openHandCards: game.players[3].hand },
-        { seat: 1, position: 'right', subtitle: getSeatSubtitle(config.seatConfigs[1]), openHandCards: game.players[1].hand },
-        { seat: 0, position: 'bottom', subtitle: getSeatSubtitle(config.seatConfigs[0]), openHandCards: game.players[0].hand },
+        { seat: 2, position: 'top', subtitle: getSeatSubtitle(config.seatConfigs[2]) },
+        { seat: 3, position: 'left', subtitle: getSeatSubtitle(config.seatConfigs[3]) },
+        { seat: 1, position: 'right', subtitle: getSeatSubtitle(config.seatConfigs[1]) },
+        { seat: 0, position: 'bottom', subtitle: getSeatSubtitle(config.seatConfigs[0]) },
       ]}
       afterStage={
         <section className="arena-dashboard">
           <section className="arena-panel arena-open-table-panel">
             <div className="arena-panel-header">
               <div>
-                <span className="label">全桌明牌</span>
-                <strong>4 个 player 的手牌和最近出牌都会在这里持续可见</strong>
+                <span className="label">本轮出牌</span>
+                <strong>只显示 4 个 player 这一轮打出的牌、状态和剩余张数</strong>
               </div>
             </div>
 
             <div className="arena-open-table-grid">
-              {visibleHands.map(({ seat, player, trace, handGroups, active }) => (
+              {visibleSeats.map(({ seat, player, trace, handGroups, active }) => (
                 <article className={`arena-open-seat-card ${active ? 'active' : ''}`} key={seat}>
                   <div className="arena-open-seat-header">
                     <div>
@@ -285,6 +321,71 @@ export default function ArenaSpectator({ config }: { config: SpectatorArenaConfi
               ))}
             </div>
           </section>
+
+          {remoteSeats.length > 0 ? (
+            <section className="arena-panel arena-llm-status-panel">
+              <div className="arena-panel-header">
+                <div>
+                  <span className="label">LLM Status</span>
+                  <strong>最近模型请求、非法 JSON、repair 和 fallback 诊断</strong>
+                </div>
+              </div>
+
+              <div className="arena-llm-status-grid">
+                {remoteSeats.map((seat) => {
+                  const status = llmSeatStatus[seat];
+
+                  return (
+                    <article className="arena-llm-seat-card" key={`llm-status-seat-${seat}`}>
+                      <div className="arena-llm-seat-header">
+                        <div>
+                          <span className="eyebrow">
+                            Seat {seat} · {getSeatTitle(seat)}
+                          </span>
+                          <strong>{getSeatDisplayLabel(config.seatConfigs[seat])}</strong>
+                        </div>
+                        <span className={`arena-llm-status-pill ${status?.level ?? 'info'}`}>
+                          {status ? getLlmStatusLabel(status.code) : '等待请求'}
+                        </span>
+                      </div>
+
+                      <div className="arena-summary-model">{getSeatModeSummary(config.seatConfigs[seat])}</div>
+                      <p className="arena-llm-status-message">
+                        {status ? status.message : '这一家还没有发起模型请求。'}
+                      </p>
+                      <div className="arena-llm-status-meta">
+                        {status ? `${formatStatusTimestamp(status.timestamp)} · ${status.model}` : getSeatLlmModelLabel(config.seatConfigs[seat])}
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
+
+              <div className="arena-llm-status-list">
+                {llmStatusLog.length > 0 ? (
+                  llmStatusLog.map((entry) => (
+                    <article className="arena-llm-status-entry" key={entry.id}>
+                      <div className="arena-llm-status-topline">
+                        <div>
+                          <strong>
+                            Seat {entry.seat ?? '-'} · {entry.agentLabel}
+                          </strong>
+                          <span>
+                            {formatStatusTimestamp(entry.timestamp)} · {entry.model}
+                          </span>
+                        </div>
+                        <span className={`arena-llm-status-pill ${entry.level}`}>{getLlmStatusLabel(entry.code)}</span>
+                      </div>
+                      <p>{entry.message}</p>
+                      {entry.detail ? <pre className="arena-llm-status-detail">{entry.detail}</pre> : null}
+                    </article>
+                  ))
+                ) : (
+                  <div className="arena-empty">模型状态会在请求、repair、fallback 时实时出现在这里。</div>
+                )}
+              </div>
+            </section>
+          ) : null}
 
           <section className="arena-panel">
             <div className="arena-panel-header">
@@ -424,23 +525,39 @@ export default function ArenaSpectator({ config }: { config: SpectatorArenaConfi
   );
 }
 
-function createSpectatorMatch(config: SpectatorArenaConfig): GuandanArenaMatch {
+function createSpectatorMatch(
+  config: SpectatorArenaConfig,
+  onLlmStatus?: (entry: OpenRouterStatusEvent) => void,
+): GuandanArenaMatch {
   return new GuandanArenaMatch({
     agents: [
-      resolveSeatAgent(config.seatConfigs[0], config.globalConfig, 0),
-      resolveSeatAgent(config.seatConfigs[1], config.globalConfig, 1),
-      resolveSeatAgent(config.seatConfigs[2], config.globalConfig, 2),
-      resolveSeatAgent(config.seatConfigs[3], config.globalConfig, 3),
+      resolveSeatAgent(config.seatConfigs[0], config.globalConfig, 0, onLlmStatus),
+      resolveSeatAgent(config.seatConfigs[1], config.globalConfig, 1, onLlmStatus),
+      resolveSeatAgent(config.seatConfigs[2], config.globalConfig, 2, onLlmStatus),
+      resolveSeatAgent(config.seatConfigs[3], config.globalConfig, 3, onLlmStatus),
     ],
   });
 }
 
-function resolveSeatAgent(seatConfig: SpectatorSeatConfig, globalConfig: SpectatorGlobalConfig, seat: Seat) {
+function resolveSeatAgent(
+  seatConfig: SpectatorSeatConfig,
+  globalConfig: SpectatorGlobalConfig,
+  seat: Seat,
+  onLlmStatus?: (entry: OpenRouterStatusEvent) => void,
+) {
   if (seatConfig.mode === 'builtin-balanced-v2') {
     return createHeuristicAgent({
       id: `builtin-balanced-seat-${seat}`,
       label: seatConfig.label || `Seat ${seat} Balanced`,
       profile: 'balanced-v2',
+    });
+  }
+
+  if (seatConfig.mode === 'builtin-legacy-vR') {
+    return createHeuristicAgent({
+      id: `builtin-legacy-vr-seat-${seat}`,
+      label: seatConfig.label || `Seat ${seat} Legacy vR`,
+      profile: 'legacy-vR',
     });
   }
 
@@ -460,6 +577,20 @@ function resolveSeatAgent(seatConfig: SpectatorSeatConfig, globalConfig: Spectat
     });
   }
 
+  if (seatConfig.mode === 'llmreranker') {
+    return createOpenRouterRerankerAgent({
+      id: `llmreranker-seat-${seat}`,
+      label: seatConfig.label || `Seat ${seat} LLM Reranker`,
+      apiKey: seatConfig.apiKey.trim() || globalConfig.apiKey.trim(),
+      model: seatConfig.model.trim() || OPENROUTER_DEFAULT_RERANKER_MODEL,
+      baseUrl: globalConfig.baseUrl.trim() || OPENROUTER_DEFAULT_BASE_URL,
+      siteName: 'Guandan Arena',
+      siteUrl: typeof window !== 'undefined' ? window.location.origin : undefined,
+      seat,
+      onStatus: onLlmStatus,
+    });
+  }
+
   return createOpenRouterAgent({
     id: `openrouter-seat-${seat}`,
     label: seatConfig.label || `Seat ${seat} LLM`,
@@ -468,6 +599,8 @@ function resolveSeatAgent(seatConfig: SpectatorSeatConfig, globalConfig: Spectat
     baseUrl: globalConfig.baseUrl.trim() || OPENROUTER_DEFAULT_BASE_URL,
     siteName: 'Guandan Arena',
     siteUrl: typeof window !== 'undefined' ? window.location.origin : undefined,
+    seat,
+    onStatus: onLlmStatus,
   });
 }
 
@@ -484,6 +617,10 @@ function getSeatModeSummary(config: SpectatorSeatConfig): string {
     return 'guandan-ai v2 balanced';
   }
 
+  if (config.mode === 'builtin-legacy-vR') {
+    return 'guandan-ai vR';
+  }
+
   if (config.mode === 'builtin-legacy-v1') {
     return 'guandan-ai v1 legacy';
   }
@@ -492,7 +629,63 @@ function getSeatModeSummary(config: SpectatorSeatConfig): string {
     return '基础内置 heuristic';
   }
 
-  return config.model;
+  if (config.mode === 'llmreranker') {
+    return `LLM reranker · ${getSeatLlmModelLabel(config)}`;
+  }
+
+  return getSeatLlmModelLabel(config);
+}
+
+function usesRemoteModel(config: SpectatorSeatConfig): boolean {
+  return config.mode === 'openrouter' || config.mode === 'llmreranker';
+}
+
+function getLlmStatusLabel(code: OpenRouterStatusCode): string {
+  if (code === 'requesting') {
+    return '请求中';
+  }
+
+  if (code === 'success') {
+    return '成功';
+  }
+
+  if (code === 'request_error') {
+    return '接口失败';
+  }
+
+  if (code === 'invalid_json') {
+    return '非法 JSON';
+  }
+
+  if (code === 'repairing') {
+    return '修复中';
+  }
+
+  if (code === 'repair_success') {
+    return '修复成功';
+  }
+
+  if (code === 'fallback') {
+    return '已 fallback';
+  }
+
+  return '已跳过';
+}
+
+function formatStatusTimestamp(timestamp: number): string {
+  return new Date(timestamp).toLocaleTimeString('zh-CN', {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  });
+}
+
+function getSeatLlmModelLabel(config: SpectatorSeatConfig): string {
+  if (config.mode === 'llmreranker') {
+    return config.model || OPENROUTER_DEFAULT_RERANKER_MODEL;
+  }
+
+  return config.model || '未设模型';
 }
 
 function getSeatRecentAction(game: GameState, seat: Seat): string {

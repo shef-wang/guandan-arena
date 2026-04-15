@@ -62,6 +62,8 @@ export function createHeuristicAgent(config?: { id?: string; label?: string; pro
       config?.label ??
       (config?.profile === 'baseline'
         ? 'Builtin Baseline'
+        : config?.profile === 'legacy-vR'
+          ? 'guandan-ai vR'
         : config?.profile === 'legacy-v1'
           ? 'guandan-ai v1'
           : 'guandan-ai v2 balanced'),

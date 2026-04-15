@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import platform
 import random
+import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -19,6 +23,49 @@ def pick_device() -> torch.device:
     if torch.backends.mps.is_available():
         return torch.device("mps")
     return torch.device("cpu")
+
+
+def read_command_output(command: list[str]) -> str | None:
+    try:
+        return subprocess.check_output(command, text=True).strip()
+    except Exception:
+        return None
+
+
+def read_system_info(device: torch.device) -> dict:
+    chip_name = read_command_output(["sysctl", "-n", "machdep.cpu.brand_string"])
+    if not chip_name:
+        chip_name = read_command_output(["sysctl", "-n", "hw.model"]) or platform.processor() or "unknown"
+
+    memory_bytes = read_command_output(["sysctl", "-n", "hw.memsize"])
+    total_memory_gb = None
+    if memory_bytes and memory_bytes.isdigit():
+        total_memory_gb = round(int(memory_bytes) / (1024**3), 2)
+
+    return {
+        "platform": platform.platform(),
+        "machine": platform.machine(),
+        "processor": chip_name,
+        "cpu_count": os.cpu_count(),
+        "total_memory_gb": total_memory_gb,
+        "device": str(device),
+        "mps_built": bool(torch.backends.mps.is_built()),
+        "mps_available": bool(torch.backends.mps.is_available()),
+    }
+
+
+def get_device_stats(device: torch.device) -> dict:
+    stats: dict[str, float | int | None] = {}
+    if device.type == "mps":
+        try:
+            stats["mps_current_allocated_mb"] = round(torch.mps.current_allocated_memory() / (1024**2), 2)
+            stats["mps_driver_allocated_mb"] = round(torch.mps.driver_allocated_memory() / (1024**2), 2)
+            stats["mps_recommended_max_mb"] = round(torch.mps.recommended_max_memory() / (1024**2), 2)
+        except Exception:
+            stats["mps_current_allocated_mb"] = None
+            stats["mps_driver_allocated_mb"] = None
+            stats["mps_recommended_max_mb"] = None
+    return stats
 
 
 @dataclass
@@ -180,14 +227,34 @@ def main() -> None:
 
     output_dir = Path(args.output_dir)
     meta = {
-      "state_dim": state_dim,
-      "action_dim": action_dim,
-      "hidden_dim": args.hidden_dim,
-      "action_hidden_dim": args.action_hidden_dim,
-      "seed": args.seed,
-      "train_path": args.train,
-      "valid_path": args.valid,
+        "state_dim": state_dim,
+        "action_dim": action_dim,
+        "hidden_dim": args.hidden_dim,
+        "action_hidden_dim": args.action_hidden_dim,
+        "seed": args.seed,
+        "train_path": args.train,
+        "valid_path": args.valid,
     }
+    system_info = read_system_info(device)
+    print(
+        json.dumps(
+            {
+                "event": "training_start",
+                "system": system_info,
+                "train_samples": len(train_dataset),
+                "valid_samples": len(valid_dataset),
+                "batch_size": args.batch_size,
+                "epochs": args.epochs,
+                "model": {
+                    "state_dim": state_dim,
+                    "action_dim": action_dim,
+                    "hidden_dim": args.hidden_dim,
+                    "action_hidden_dim": args.action_hidden_dim,
+                },
+            }
+        ),
+        flush=True,
+    )
 
     history: list[dict] = []
     save_checkpoint(output_dir / "epoch_000.pt", model, optimizer, meta)
@@ -197,6 +264,7 @@ def main() -> None:
         total_loss = 0.0
         total_correct = 0
         total_examples = 0
+        epoch_start = time.perf_counter()
 
         for states, actions, legal_mask, action_targets, value_targets in train_loader:
             states = states.to(device)
@@ -221,6 +289,8 @@ def main() -> None:
         train_loss = total_loss / total_examples
         train_acc = total_correct / total_examples
         valid_loss, valid_acc, valid_value_loss = evaluate(model, valid_loader, device)
+        epoch_seconds = time.perf_counter() - epoch_start
+        samples_per_second = total_examples / epoch_seconds if epoch_seconds > 0 else None
 
         epoch_record = {
             "epoch": epoch,
@@ -229,7 +299,10 @@ def main() -> None:
             "valid_loss": round(valid_loss, 6),
             "valid_accuracy": round(valid_acc, 6),
             "valid_value_loss": round(valid_value_loss, 6),
+            "epoch_seconds": round(epoch_seconds, 3),
+            "samples_per_second": round(samples_per_second, 2) if samples_per_second else None,
         }
+        epoch_record.update(get_device_stats(device))
         history.append(epoch_record)
         save_checkpoint(output_dir / f"epoch_{epoch:03d}.pt", model, optimizer, meta)
         print(json.dumps(epoch_record), flush=True)
@@ -237,7 +310,7 @@ def main() -> None:
     with open(output_dir / "history.json", "w", encoding="utf8") as handle:
         json.dump(
             {
-                "device": str(device),
+                "system": system_info,
                 "history": history,
             },
             handle,

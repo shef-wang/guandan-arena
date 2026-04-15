@@ -1,5 +1,7 @@
+import type { Seat } from '../game/types';
+import { chooseAiAction, rankLegacyV1ActionCandidates } from '../game/ai';
 import { parseArenaChosenAction } from './engine';
-import { formatTurnInputAsPrompt } from './prompt';
+import { formatArenaLlmSystemPrompt, formatTurnInputAsPrompt } from './prompt';
 import type { ArenaActionOption, ArenaChosenAction, ArenaTurnInput, GuandanArenaAgent } from './types';
 
 export interface OpenRouterAgentConfig {
@@ -13,6 +15,50 @@ export interface OpenRouterAgentConfig {
   temperature?: number;
   maxTokens?: number;
   timeoutMs?: number;
+  seat?: Seat;
+  onStatus?: (event: OpenRouterStatusEvent) => void;
+  onRerankDecision?: (event: OpenRouterRerankDecisionEvent) => void;
+}
+
+export type OpenRouterAgentMode = 'openrouter' | 'llmreranker';
+export type OpenRouterStatusLevel = 'info' | 'success' | 'warn' | 'error';
+export type OpenRouterStatusCode =
+  | 'skipped'
+  | 'requesting'
+  | 'success'
+  | 'request_error'
+  | 'invalid_json'
+  | 'repairing'
+  | 'repair_success'
+  | 'fallback';
+
+export interface OpenRouterStatusEvent {
+  agentId: string;
+  agentLabel: string;
+  seat?: Seat;
+  mode: OpenRouterAgentMode;
+  model: string;
+  level: OpenRouterStatusLevel;
+  code: OpenRouterStatusCode;
+  message: string;
+  detail?: string;
+  timestamp: number;
+}
+
+export interface OpenRouterRerankDecisionEvent {
+  agentId: string;
+  agentLabel: string;
+  seat?: Seat;
+  model: string;
+  timestamp: number;
+  skipped: boolean;
+  candidateCount: number;
+  chosenAction: ArenaChosenAction;
+  fallbackAction: ArenaChosenAction;
+  chosenLegacyRank: number | null;
+  fallbackLegacyRank: number | null;
+  deviatedFromLegacyTop: boolean;
+  deviatedFromLegacyFallback: boolean;
 }
 
 interface OpenRouterResponse {
@@ -28,31 +74,233 @@ interface OpenRouterResponse {
 }
 
 export const OPENROUTER_DEFAULT_BASE_URL = 'https://openrouter.ai/api/v1/chat/completions';
+export const OPENROUTER_DEFAULT_RERANKER_MODEL = 'deepseek/deepseek-chat-v3-0324';
+const DEFAULT_MAX_TOKENS = 96;
+const DEFAULT_RERANKER_TOP_K = 6;
+
+interface RerankerCandidate {
+  key: string;
+  action: ArenaChosenAction;
+  option: ArenaActionOption | null;
+  legacyRank: number;
+  legacyScore: number;
+  isFallback: boolean;
+}
 
 export function createOpenRouterAgent(config: OpenRouterAgentConfig): GuandanArenaAgent {
   return {
     id: config.id,
     label: config.label,
     async decideTurn(input) {
+      const systemPrompt = formatArenaLlmSystemPrompt(input);
       const basePrompt = formatTurnInputAsPrompt(input);
       const legalActions = input.legalActions;
+      const fallback = chooseFallbackAction(legalActions);
 
-      try {
-        const firstRaw = await requestOpenRouterText(config, basePrompt);
-        return parseArenaChosenAction(firstRaw, legalActions);
-      } catch (firstError) {
-        try {
-          const secondRaw = await requestOpenRouterText(
-            config,
-            buildRepairPrompt(basePrompt, legalActions, getErrorMessage(firstError)),
-          );
-          return parseArenaChosenAction(secondRaw, legalActions);
-        } catch {
-          return chooseFallbackAction(legalActions);
-        }
-      }
+      return decideWithRepair({
+        mode: 'openrouter',
+        requestConfig: config,
+        systemPrompt,
+        prompt: basePrompt,
+        requestMessage: 'Calling model for action selection.',
+        buildRepairPrompt: (errorMessage) => buildRepairPrompt(basePrompt, legalActions, errorMessage),
+        parseAction: (raw) => parseArenaChosenAction(raw, legalActions),
+        fallbackAction: fallback,
+        fallbackReasonLabel: 'Repair failed, using builtin legal fallback.',
+      });
     },
   };
+}
+
+export function createOpenRouterRerankerAgent(
+  config: OpenRouterAgentConfig & {
+    topK?: number;
+  },
+): GuandanArenaAgent {
+  return {
+    id: config.id,
+    label: config.label,
+    async decideTurn(input, context) {
+      const requestConfig: OpenRouterAgentConfig = {
+        ...config,
+        model: config.model.trim() || OPENROUTER_DEFAULT_RERANKER_MODEL,
+      };
+      const fallback = toArenaChosenAction(chooseAiAction(context.state, context.seat, 'legacy-v1'));
+      const candidates = buildRerankerCandidates(context.state, input, fallback, config.topK ?? DEFAULT_RERANKER_TOP_K);
+      const fallbackCandidate = candidates.find((candidate) => candidate.isFallback) ?? null;
+
+      if (candidates.length <= 1 || input.legalActions.length <= 2 || (fallback.kind === 'pass' && candidates.length <= 2)) {
+        emitStatus(requestConfig, 'llmreranker', {
+          code: 'skipped',
+          level: 'info',
+          message: 'Skipped LLM rerank for a trivial position; kept legacy-v1 fallback.',
+          detail: [
+            `fallback=${formatChosenAction(fallback)}`,
+            `candidates=${candidates.length}`,
+            `legalActions=${input.legalActions.length}`,
+          ].join('\n'),
+        });
+        emitRerankDecision(requestConfig, {
+          skipped: true,
+          candidateCount: candidates.length,
+          chosenAction: fallback,
+          fallbackAction: fallback,
+          chosenLegacyRank: fallbackCandidate?.legacyRank ?? null,
+          fallbackLegacyRank: fallbackCandidate?.legacyRank ?? null,
+        });
+        return fallback;
+      }
+
+      const systemPrompt = [
+        formatArenaLlmSystemPrompt(input),
+        'You are not generating legal actions from scratch.',
+        'You are reranking a shortlist of candidate actions produced by a legacy heuristic.',
+        'You may choose ONLY from the candidate actions provided below.',
+        'Keep the legacy fallback unless team-level context clearly favors another candidate.',
+      ].join(' ');
+      const prompt = buildRerankerPrompt(input, candidates);
+
+      const action = await decideWithRepair({
+        mode: 'llmreranker',
+        requestConfig,
+        systemPrompt,
+        prompt,
+        requestMessage: `Calling model to rerank ${candidates.length} legacy candidates.`,
+        buildRepairPrompt: (errorMessage) => buildCandidateRepairPrompt(candidates, errorMessage),
+        parseAction: (raw) => validateRerankerAction(parseArenaChosenAction(raw), candidates),
+        fallbackAction: fallback,
+        fallbackReasonLabel: 'Repair failed, falling back to legacy-v1.',
+      });
+
+      const chosenCandidate = candidates.find((candidate) => candidate.key === actionKey(action)) ?? null;
+      emitRerankDecision(requestConfig, {
+        skipped: false,
+        candidateCount: candidates.length,
+        chosenAction: action,
+        fallbackAction: fallback,
+        chosenLegacyRank: chosenCandidate?.legacyRank ?? null,
+        fallbackLegacyRank: fallbackCandidate?.legacyRank ?? null,
+      });
+
+      return action;
+    },
+  };
+}
+
+interface OpenRouterDecisionFlowConfig {
+  mode: OpenRouterAgentMode;
+  requestConfig: OpenRouterAgentConfig;
+  systemPrompt: string;
+  prompt: string;
+  requestMessage: string;
+  buildRepairPrompt: (errorMessage: string) => string;
+  parseAction: (raw: string) => ArenaChosenAction;
+  fallbackAction: ArenaChosenAction;
+  fallbackReasonLabel: string;
+}
+
+async function decideWithRepair(config: OpenRouterDecisionFlowConfig): Promise<ArenaChosenAction> {
+  emitStatus(config.requestConfig, config.mode, {
+    code: 'requesting',
+    level: 'info',
+    message: config.requestMessage,
+  });
+
+  try {
+    const firstRaw = await requestOpenRouterText(config.requestConfig, config.systemPrompt, config.prompt);
+
+    try {
+      const action = config.parseAction(firstRaw);
+      emitStatus(config.requestConfig, config.mode, {
+        code: 'success',
+        level: 'success',
+        message: `Model reply accepted: ${formatChosenAction(action)}.`,
+      });
+      return action;
+    } catch (firstParseError) {
+      const firstErrorMessage = getErrorMessage(firstParseError);
+      const invalidDetail = formatInvalidReplyDetail(firstParseError, firstRaw);
+
+      emitStatus(config.requestConfig, config.mode, {
+        code: 'invalid_json',
+        level: 'warn',
+        message: 'Primary reply was not valid legal JSON; requesting strict repair.',
+        detail: invalidDetail,
+      });
+
+      return requestRepair(config, firstErrorMessage, invalidDetail);
+    }
+  } catch (firstRequestError) {
+    const firstErrorMessage = getErrorMessage(firstRequestError);
+    const requestDetail = `Primary request error: ${firstErrorMessage}`;
+
+    emitStatus(config.requestConfig, config.mode, {
+      code: 'request_error',
+      level: 'warn',
+      message: 'Primary request failed; retrying once with a strict JSON prompt.',
+      detail: requestDetail,
+    });
+
+    return requestRepair(config, firstErrorMessage, requestDetail);
+  }
+}
+
+async function requestRepair(
+  config: OpenRouterDecisionFlowConfig,
+  firstErrorMessage: string,
+  firstFailureDetail: string,
+): Promise<ArenaChosenAction> {
+  emitStatus(config.requestConfig, config.mode, {
+    code: 'repairing',
+    level: 'info',
+    message: 'Sending repair request with constrained legal JSON outputs.',
+  });
+
+  try {
+    const secondRaw = await requestOpenRouterText(
+      config.requestConfig,
+      config.systemPrompt,
+      config.buildRepairPrompt(firstErrorMessage),
+    );
+
+    try {
+      const repairedAction = config.parseAction(secondRaw);
+      emitStatus(config.requestConfig, config.mode, {
+        code: 'repair_success',
+        level: 'warn',
+        message: `Repair reply accepted: ${formatChosenAction(repairedAction)}.`,
+        detail: firstFailureDetail,
+      });
+      return repairedAction;
+    } catch (secondParseError) {
+      const fallbackDetail = joinStatusDetails(
+        firstFailureDetail,
+        `Repair parse error: ${getErrorMessage(secondParseError)}`,
+        `Repair raw reply:\n${truncateForStatus(secondRaw)}`,
+      );
+
+      emitStatus(config.requestConfig, config.mode, {
+        code: 'fallback',
+        level: 'error',
+        message: `${config.fallbackReasonLabel} ${formatChosenAction(config.fallbackAction)}.`,
+        detail: fallbackDetail,
+      });
+      return config.fallbackAction;
+    }
+  } catch (secondRequestError) {
+    const fallbackDetail = joinStatusDetails(
+      firstFailureDetail,
+      `Repair request error: ${getErrorMessage(secondRequestError)}`,
+    );
+
+    emitStatus(config.requestConfig, config.mode, {
+      code: 'fallback',
+      level: 'error',
+      message: `${config.fallbackReasonLabel} ${formatChosenAction(config.fallbackAction)}.`,
+      detail: fallbackDetail,
+    });
+    return config.fallbackAction;
+  }
 }
 
 function buildHeaders(config: OpenRouterAgentConfig): HeadersInit {
@@ -72,7 +320,7 @@ function buildHeaders(config: OpenRouterAgentConfig): HeadersInit {
   return headers;
 }
 
-async function requestOpenRouterText(config: OpenRouterAgentConfig, prompt: string): Promise<string> {
+async function requestOpenRouterText(config: OpenRouterAgentConfig, systemPrompt: string, prompt: string): Promise<string> {
   const controller = new AbortController();
   const timeoutId = globalThis.setTimeout(() => controller.abort(), config.timeoutMs ?? 45_000);
 
@@ -83,12 +331,11 @@ async function requestOpenRouterText(config: OpenRouterAgentConfig, prompt: stri
       body: JSON.stringify({
         model: config.model,
         temperature: config.temperature ?? 0.1,
-        max_tokens: config.maxTokens ?? 600,
+        max_tokens: config.maxTokens ?? DEFAULT_MAX_TOKENS,
         messages: [
           {
             role: 'system',
-            content:
-              'You are playing Guandan in a code-driven arena. Always choose exactly one legal action and return JSON only.',
+            content: systemPrompt,
           },
           {
             role: 'user',
@@ -145,19 +392,256 @@ function extractOpenRouterText(data: OpenRouterResponse): string {
   return '';
 }
 
-function buildRepairPrompt(basePrompt: string, legalActions: ArenaActionOption[], errorMessage: string): string {
-  const legalActionSummary = legalActions.map((action) => ({
-    kind: action.kind,
-    actionId: action.actionId,
-    label: action.label,
-  }));
+function buildRepairPrompt(_basePrompt: string, legalActions: ArenaActionOption[], errorMessage: string): string {
+  const legalActionSummary = legalActions.map((action) =>
+    action.kind === 'pass' ? { kind: 'pass' } : { kind: 'play', actionId: action.actionId },
+  );
 
   return [
-    basePrompt,
-    `Your previous answer was invalid for this turn: ${errorMessage}`,
-    'Reply again with exactly one valid JSON action. Do not explain.',
-    JSON.stringify({ legalActions: legalActionSummary }, null, 2),
+    `Previous reply invalid: ${errorMessage}`,
+    'Reply with exactly one JSON object and nothing else.',
+    'Allowed outputs:',
+    ...legalActionSummary.map((action) => JSON.stringify(action)),
   ].join('\n\n');
+}
+
+function buildCandidateRepairPrompt(candidates: RerankerCandidate[], errorMessage: string): string {
+  return [
+    `Previous reply invalid: ${errorMessage}`,
+    'Reply with exactly one JSON object and nothing else.',
+    'Allowed outputs:',
+    ...candidates.map((candidate) => JSON.stringify(candidate.action)),
+  ].join('\n\n');
+}
+
+function buildRerankerPrompt(input: ArenaTurnInput, candidates: RerankerCandidate[]): string {
+  const fallbackCandidate = candidates.find((candidate) => candidate.isFallback) ?? candidates[0];
+
+  return [
+    'Task',
+    'Choose exactly one action from the candidate shortlist below.',
+    'You may only return one of the listed JSON actions.',
+    'Prefer the fallback if no candidate clearly improves team outcome.',
+    '',
+    `Legacy fallback: ${formatCandidateHeader(fallbackCandidate)}`,
+    '',
+    'Candidate Shortlist',
+    ...candidates.map(formatRerankerCandidate),
+    '',
+    'Full State Snapshot',
+    formatTurnInputAsPrompt(input),
+  ].join('\n');
+}
+
+function buildRerankerCandidates(
+  state: Parameters<typeof rankLegacyV1ActionCandidates>[0],
+  input: ArenaTurnInput,
+  fallback: ArenaChosenAction,
+  topK: number,
+): RerankerCandidate[] {
+  const ranked = rankLegacyV1ActionCandidates(state, input.seat);
+  const fallbackKey = actionKey(fallback);
+  const seen = new Set<string>();
+  const candidates: RerankerCandidate[] = [];
+
+  for (const [index, candidate] of ranked.entries()) {
+    const resolved = resolveRerankerCandidate(candidate, input.legalActions, index + 1, fallbackKey);
+    if (!resolved || seen.has(resolved.key)) {
+      continue;
+    }
+
+    seen.add(resolved.key);
+    candidates.push(resolved);
+
+    if (candidates.length >= topK) {
+      break;
+    }
+  }
+
+  if (!seen.has(fallbackKey)) {
+    const fallbackCandidate = resolveFallbackCandidate(fallback, input.legalActions, candidates.length + 1);
+    if (fallbackCandidate) {
+      candidates.push({
+        ...fallbackCandidate,
+        isFallback: true,
+      });
+    }
+  }
+
+  return candidates;
+}
+
+function resolveRerankerCandidate(
+  candidate: ReturnType<typeof rankLegacyV1ActionCandidates>[number],
+  legalActions: ArenaActionOption[],
+  legacyRank: number,
+  fallbackKey: string,
+): RerankerCandidate | null {
+  if (candidate.type === 'pass') {
+    const passOption = legalActions.find((action) => action.kind === 'pass') ?? null;
+    if (!passOption) {
+      return null;
+    }
+
+    return {
+      key: 'pass',
+      action: { kind: 'pass' },
+      option: passOption,
+      legacyRank,
+      legacyScore: candidate.score,
+      isFallback: fallbackKey === 'pass',
+    };
+  }
+
+  if (!candidate.play) {
+    return null;
+  }
+
+  const actionId = actionIdForPlayKey(candidate.play.key);
+  const option = legalActions.find((action) => action.kind === 'play' && action.actionId === actionId) ?? null;
+  if (!option) {
+    return null;
+  }
+
+  return {
+    key: actionId,
+    action: {
+      kind: 'play',
+      actionId,
+    },
+    option,
+    legacyRank,
+    legacyScore: candidate.score,
+    isFallback: fallbackKey === actionId,
+  };
+}
+
+function resolveFallbackCandidate(
+  fallback: ArenaChosenAction,
+  legalActions: ArenaActionOption[],
+  legacyRank: number,
+): RerankerCandidate | null {
+  const key = actionKey(fallback);
+
+  if (fallback.kind === 'pass') {
+    const option = legalActions.find((action) => action.kind === 'pass') ?? null;
+    if (!option) {
+      return null;
+    }
+
+    return {
+      key,
+      action: fallback,
+      option,
+      legacyRank,
+      legacyScore: Number.NEGATIVE_INFINITY,
+      isFallback: true,
+    };
+  }
+
+  const option = legalActions.find((action) => action.kind === 'play' && action.actionId === fallback.actionId) ?? null;
+  if (!option) {
+    return null;
+  }
+
+  return {
+    key,
+    action: fallback,
+    option,
+    legacyRank,
+    legacyScore: Number.NEGATIVE_INFINITY,
+    isFallback: true,
+  };
+}
+
+function validateRerankerAction(action: ArenaChosenAction, candidates: RerankerCandidate[]): ArenaChosenAction {
+  const chosenKey = actionKey(action);
+  if (!candidates.some((candidate) => candidate.key === chosenKey)) {
+    throw new Error(`Chosen action "${chosenKey}" is outside the reranker candidate shortlist.`);
+  }
+
+  return action;
+}
+
+function formatRerankerCandidate(candidate: RerankerCandidate): string {
+  const option = candidate.option;
+  const lines = [
+    `- Candidate #${candidate.legacyRank}${candidate.isFallback ? ' [legacy-fallback]' : ''}`,
+    `  legacyScore=${candidate.legacyScore}`,
+    `  action=${JSON.stringify(candidate.action)}`,
+  ];
+
+  if (!option || option.kind === 'pass' || !option.play) {
+    lines.push('  summary=pass');
+    return lines.join('\n');
+  }
+
+  lines.push(
+    `  summary=${option.label} | type=${option.play.type} | size=${option.play.size} | primary=${option.play.primaryValue} | bomb=${option.play.bombSize ?? '-'} | wild=${option.play.wildCount} | cards=${option.play.cards.map((card) => `${card.rank}-${card.suit}${card.isWild ? '*' : ''}`).join(' ')}`,
+  );
+
+  return lines.join('\n');
+}
+
+function formatCandidateHeader(candidate: RerankerCandidate): string {
+  return `${JSON.stringify(candidate.action)} | legacyScore=${candidate.legacyScore}`;
+}
+
+function toArenaChosenAction(decision: ReturnType<typeof chooseAiAction>): ArenaChosenAction {
+  if (decision.type === 'play' && decision.play) {
+    return {
+      kind: 'play',
+      actionId: actionIdForPlayKey(decision.play.key),
+    };
+  }
+
+  return { kind: 'pass' };
+}
+
+function actionIdForPlayKey(playKey: string): string {
+  return `play:${playKey}`;
+}
+
+function actionKey(action: ArenaChosenAction): string {
+  return action.kind === 'pass' ? 'pass' : action.actionId;
+}
+
+function emitStatus(
+  config: OpenRouterAgentConfig,
+  mode: OpenRouterAgentMode,
+  event: Omit<OpenRouterStatusEvent, 'agentId' | 'agentLabel' | 'seat' | 'mode' | 'model' | 'timestamp'>,
+): void {
+  config.onStatus?.({
+    ...event,
+    agentId: config.id,
+    agentLabel: config.label,
+    seat: config.seat,
+    mode,
+    model: config.model.trim() || (mode === 'llmreranker' ? OPENROUTER_DEFAULT_RERANKER_MODEL : 'unset-model'),
+    timestamp: Date.now(),
+  });
+}
+
+function emitRerankDecision(
+  config: OpenRouterAgentConfig,
+  event: Omit<
+    OpenRouterRerankDecisionEvent,
+    'agentId' | 'agentLabel' | 'seat' | 'model' | 'timestamp' | 'deviatedFromLegacyTop' | 'deviatedFromLegacyFallback'
+  >,
+): void {
+  const chosenKey = actionKey(event.chosenAction);
+  const fallbackKey = actionKey(event.fallbackAction);
+
+  config.onRerankDecision?.({
+    ...event,
+    agentId: config.id,
+    agentLabel: config.label,
+    seat: config.seat,
+    model: config.model.trim() || OPENROUTER_DEFAULT_RERANKER_MODEL,
+    timestamp: Date.now(),
+    deviatedFromLegacyTop: event.chosenLegacyRank !== null && event.chosenLegacyRank > 1,
+    deviatedFromLegacyFallback: chosenKey !== fallbackKey,
+  });
 }
 
 function chooseFallbackAction(legalActions: ArenaActionOption[]): ArenaChosenAction {
@@ -193,4 +677,27 @@ function getErrorMessage(error: unknown): string {
   }
 
   return 'invalid response';
+}
+
+function formatChosenAction(action: ArenaChosenAction): string {
+  return JSON.stringify(action);
+}
+
+function formatInvalidReplyDetail(error: unknown, raw: string): string {
+  return joinStatusDetails(
+    `Parser error: ${getErrorMessage(error)}`,
+    `Raw reply:\n${truncateForStatus(raw)}`,
+  );
+}
+
+function joinStatusDetails(...parts: Array<string | null | undefined>): string {
+  return parts.filter(Boolean).join('\n\n');
+}
+
+function truncateForStatus(raw: string, maxLength: number = 420): string {
+  if (raw.length <= maxLength) {
+    return raw;
+  }
+
+  return `${raw.slice(0, maxLength)}…`;
 }

@@ -21,6 +21,8 @@ The goal of this folder is to prove three things:
 - `requirements.txt`
 - `policy_value_net.py`
 - `smoke_train.py`
+- `export_selfplay_ppo_dataset.ts`
+- `train_ppo.py`
 
 ## Suggested Setup
 
@@ -64,3 +66,36 @@ For Apple Silicon, the practical route is:
 - local single-process or light multi-process training first
 
 Once the model is competitive, we can bridge inference back into the TypeScript arena.
+
+## Self-Play PPO Loop
+
+The first practical RL loop in this repo is:
+
+1. start from an imitation checkpoint
+2. export sampled self-play trajectories into JSONL
+3. run PPO updates against those frozen rollout log-probabilities
+4. evaluate new checkpoints against `legacy-v1`
+
+Example flow:
+
+```bash
+./node_modules/.bin/esbuild training/danzero_mvp/export_selfplay_ppo_dataset.ts --bundle --platform=node --format=esm --outfile=/tmp/export_selfplay_ppo_dataset.mjs
+
+CHECKPOINT=training/danzero_mvp/checkpoints/legacy_imitation_full_run1/epoch_006.pt \
+MATCHES=64 \
+PYTHON_BIN=.venv-danzero/bin/python \
+OUTPUT_PATH=training/danzero_mvp/data/selfplay_rollout_run1.jsonl \
+node /tmp/export_selfplay_ppo_dataset.mjs
+
+.venv-danzero/bin/python training/danzero_mvp/train_ppo.py \
+  --rollout training/danzero_mvp/data/selfplay_rollout_run1.jsonl \
+  --init-checkpoint training/danzero_mvp/checkpoints/legacy_imitation_full_run1/epoch_006.pt \
+  --output-dir training/danzero_mvp/checkpoints/ppo_run1 \
+  --epochs 4 \
+  --batch-size 256
+```
+
+Both the PPO trainer and the policy server support headroom controls:
+
+- `--cpu-fraction 0.8`
+- `--mps-memory-fraction 0.8`

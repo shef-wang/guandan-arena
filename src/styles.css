@@ -1405,11 +1405,53 @@ button {
   font-size: 1rem;
 }
 
+.arena-seat-strategy-card {
+  gap: 12px;
+  padding: 16px;
+}
+
+.arena-seat-strategy-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.arena-seat-strategy-pill {
+  flex: 0 0 auto;
+  padding: 7px 11px;
+  border-radius: 999px;
+  font-size: 0.74rem;
+  border: 1px solid rgba(227, 239, 255, 0.12);
+  color: rgba(244, 248, 255, 0.88);
+}
+
+.arena-seat-strategy-pill.local {
+  background: rgba(113, 201, 146, 0.14);
+  border-color: rgba(113, 201, 146, 0.26);
+}
+
+.arena-seat-strategy-pill.remote {
+  background: rgba(91, 145, 255, 0.14);
+  border-color: rgba(91, 145, 255, 0.24);
+}
+
 .arena-config-note {
   margin: 0;
   color: rgba(233, 241, 255, 0.68);
   line-height: 1.5;
   font-size: 0.86rem;
+}
+
+.arena-setup-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 16px;
+}
+
+.arena-text-input:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 
 .arena-roster-summary {
@@ -1682,6 +1724,108 @@ button {
   white-space: pre-wrap;
 }
 
+.arena-llm-status-panel {
+  grid-column: 1 / -1;
+}
+
+.arena-llm-status-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.arena-llm-seat-card,
+.arena-llm-status-entry {
+  padding: 14px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(227, 239, 255, 0.1);
+}
+
+.arena-llm-seat-header,
+.arena-llm-status-topline {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.arena-llm-seat-header strong,
+.arena-llm-status-topline strong {
+  display: block;
+  margin-top: 4px;
+}
+
+.arena-llm-status-message,
+.arena-llm-status-entry p {
+  margin: 10px 0 0;
+  color: rgba(233, 241, 255, 0.8);
+  line-height: 1.5;
+}
+
+.arena-llm-status-meta,
+.arena-llm-status-topline span {
+  color: rgba(233, 241, 255, 0.64);
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
+.arena-llm-status-meta {
+  margin-top: 10px;
+}
+
+.arena-llm-status-pill {
+  flex: 0 0 auto;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(227, 239, 255, 0.12);
+  background: rgba(12, 30, 78, 0.62);
+  color: rgba(247, 250, 255, 0.9);
+  font-size: 0.74rem;
+}
+
+.arena-llm-status-pill.info {
+  background: rgba(91, 145, 255, 0.16);
+  border-color: rgba(91, 145, 255, 0.28);
+}
+
+.arena-llm-status-pill.success {
+  background: rgba(64, 201, 136, 0.16);
+  border-color: rgba(64, 201, 136, 0.3);
+}
+
+.arena-llm-status-pill.warn {
+  background: rgba(255, 191, 87, 0.16);
+  border-color: rgba(255, 191, 87, 0.28);
+}
+
+.arena-llm-status-pill.error {
+  background: rgba(255, 120, 120, 0.16);
+  border-color: rgba(255, 120, 120, 0.28);
+}
+
+.arena-llm-status-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 520px;
+  overflow-y: auto;
+}
+
+.arena-llm-status-detail {
+  margin: 10px 0 0;
+  padding: 12px;
+  border-radius: 14px;
+  background: rgba(5, 14, 34, 0.72);
+  border: 1px solid rgba(227, 239, 255, 0.08);
+  color: rgba(236, 242, 255, 0.82);
+  font-size: 0.78rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .arena-log-list {
   display: flex;
   flex-direction: column;
@@ -1747,6 +1891,10 @@ button {
 
   .arena-dashboard {
     grid-template-columns: 1fr;
+  }
+
+  .arena-llm-status-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .table-seat.left,
@@ -1901,6 +2049,7 @@ button {
 
   .arena-inline-meta,
   .arena-global-config,
+  .arena-llm-status-grid,
   .arena-open-table-grid,
   .arena-roster-grid,
   .arena-roster-summary,

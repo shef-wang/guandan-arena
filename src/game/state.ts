@@ -258,6 +258,14 @@ function resolveGameResult(
         result: null,
       };
     }
+
+    // Once the first two finishers are teammates, the game is already decided.
+    // The remaining two seats are implicitly 3rd/4th even though they should not
+    // continue to play out extra turns.
+    const remainingSeats = players.map((player) => player.seat).filter((seat) => !finishOrder.includes(seat));
+    if (remainingSeats.length === 2) {
+      resolvedOrder = [...finishOrder, ...remainingSeats];
+    }
   } else if (finishOrder.length >= 3) {
     const remainingSeats = players.map((player) => player.seat).filter((seat) => !finishOrder.includes(seat));
     if (remainingSeats.length === 1) {
