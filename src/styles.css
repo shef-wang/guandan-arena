@@ -58,6 +58,14 @@ button {
   color: #f8f4ea;
 }
 
+.app-subtitle {
+  margin: 0;
+  max-width: 720px;
+  color: rgba(236, 242, 255, 0.76);
+  font-size: 0.94rem;
+  line-height: 1.5;
+}
+
 .app-back-button {
   padding: 11px 18px;
 }
