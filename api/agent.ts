@@ -4,22 +4,20 @@ import { applyAgentAction, advanceAgentBatch, createAgentBatchState, type AgentB
 import { buildAgentJsonResponse, renderAgentHtml } from '../src/agentMode/render';
 import type { ArenaChosenAction } from '../src/arena/types';
 
-export default {
-  async fetch(request: Request): Promise<Response> {
-    if (request.method === 'POST') {
-      return POST(request);
-    }
+export default async function handler(request: Request): Promise<Response> {
+  if (request.method === 'POST') {
+    return POST(request);
+  }
 
-    if (request.method === 'GET') {
-      return GET(request);
-    }
+  if (request.method === 'GET') {
+    return GET(request);
+  }
 
-    return new Response('Method Not Allowed', {
-      status: 405,
-      headers: buildHeaders('text/plain; charset=utf-8'),
-    });
-  },
-};
+  return new Response('Method Not Allowed', {
+    status: 405,
+    headers: buildHeaders('text/plain; charset=utf-8'),
+  });
+}
 
 export async function GET(request: Request): Promise<Response> {
   try {
