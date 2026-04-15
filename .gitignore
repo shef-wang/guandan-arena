@@ -19,3 +19,6 @@ __pycache__/
 training/danzero_mvp/data/
 training/danzero_mvp/checkpoints/
 training/danzero_mvp/results/
+
+tools/*.cjs
+tools/*.mjs

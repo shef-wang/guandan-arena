@@ -66,6 +66,14 @@ button {
   line-height: 1.5;
 }
 
+.app-nav-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 11px 18px;
+  text-decoration: none;
+}
+
 .app-back-button {
   padding: 11px 18px;
 }
