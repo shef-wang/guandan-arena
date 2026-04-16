@@ -3,33 +3,15 @@ declare const process: {
   exitCode?: number;
 };
 
-import { createHeuristicAgent, createFunctionAgent, GuandanArenaMatch, parseArenaChosenAction } from './engine';
-import { createOpenRouterRerankerAgent, OPENROUTER_DEFAULT_RERANKER_MODEL } from './openrouter';
+import { createHeuristicAgent, createFunctionAgent, GuandanArenaMatch } from './engine';
+import { createOpenRouterAgent, createOpenRouterRerankerAgent, OPENROUTER_DEFAULT_RERANKER_MODEL } from './openrouter';
 import { createDeviationMetric, mergeDeviationMetric, recordDeviationMetric, summarizeDeviationMetric, type DeviationMetric } from './deviationMetric';
-import { formatArenaLlmSystemPrompt, formatTurnInputAsPrompt } from './prompt';
 import type { AiProfile } from '../game/ai';
 import { createSeededRandom } from '../game/cards';
 import { createNewGame } from '../game/state';
 import type { ArenaChosenAction, GuandanArenaAgent } from './types';
 import type { Seat, Team } from '../game/types';
 import type { OpenRouterStatusEvent } from './openrouter';
-
-interface OpenRouterResponse {
-  error?: {
-    message?: string;
-  };
-  usage?: {
-    prompt_tokens?: number;
-    completion_tokens?: number;
-    total_tokens?: number;
-  };
-  choices?: Array<{
-    message?: {
-      content?: string | Array<{ type?: string; text?: string; content?: string }>;
-      reasoning?: string;
-    };
-  }>;
-}
 
 interface UsageAccumulator {
   requests: number;
@@ -431,207 +413,50 @@ function createTrackedOpenRouterAgent(config: {
   diagnostics: RemoteDiagnostics;
   usage: UsageAccumulator;
 }): GuandanArenaAgent {
-  return createFunctionAgent({
+  const turnFailures: string[] = [];
+  const agent = createOpenRouterAgent({
     id: `openrouter-seat-${config.seat}`,
     label: config.label,
-    async decideTurn(input) {
-      const systemPrompt = formatArenaLlmSystemPrompt(input);
-      const prompt = formatTurnInputAsPrompt(input);
-      return await requestValidAction(config, systemPrompt, prompt, input.legalActions);
-    },
-  });
-}
-
-async function requestValidAction(
-  config: {
-    label: string;
-    apiKey: string;
-    model: string;
-    baseUrl: string;
-    strictRemote: boolean;
-    timeoutMs: number;
-    maxTokens: number;
-    diagnostics: RemoteDiagnostics;
-    usage: UsageAccumulator;
-  },
-  systemPrompt: string,
-  prompt: string,
-  legalActions: Parameters<typeof parseArenaChosenAction>[1],
-): Promise<ArenaChosenAction> {
-  try {
-    const firstAttempt = await requestOpenRouterCompletion(config, systemPrompt, prompt);
-    try {
-      const action = parseArenaChosenAction(firstAttempt.raw, legalActions);
-      config.diagnostics.successfulActions += 1;
-      return action;
-    } catch (error) {
-      config.diagnostics.invalidReplies += 1;
-      addDiagnosticSample(config.diagnostics, `Invalid primary reply: ${getErrorMessage(error)}\nRaw reply:\n${truncate(firstAttempt.raw)}`);
-      const repairMessage = error instanceof Error ? error.message : 'Invalid action';
-      const repairPrompt = buildRepairPrompt(legalActions, repairMessage);
-      config.diagnostics.repairsAttempted += 1;
-      try {
-        const secondAttempt = await requestOpenRouterCompletion(config, systemPrompt, repairPrompt);
-        const repairedAction = parseArenaChosenAction(secondAttempt.raw, legalActions);
-        config.diagnostics.repairSuccesses += 1;
-        config.diagnostics.successfulActions += 1;
-        return repairedAction;
-      } catch (repairError) {
-        config.diagnostics.fallbacks += 1;
-        addDiagnosticSample(
-          config.diagnostics,
-          `Repair failed: ${getErrorMessage(repairError)}\nFallback action: ${JSON.stringify(chooseFallbackAction(legalActions))}`,
-        );
-        if (config.strictRemote) {
-          throw new Error(`Strict remote mode blocked fallback after invalid reply: ${getErrorMessage(repairError)}`);
-        }
-
-        return chooseFallbackAction(legalActions);
+    apiKey: config.apiKey,
+    model: config.model,
+    baseUrl: config.baseUrl,
+    seat: config.seat,
+    temperature: 0,
+    timeoutMs: config.timeoutMs,
+    maxTokens: config.maxTokens,
+    onStatus(event) {
+      recordStatusEvent(config.diagnostics, event);
+      estimateUsageFromStatus(config.usage, event);
+      if (event.code === 'fallback') {
+        turnFailures.push(event.message);
       }
-    }
-  } catch (requestError) {
-    if (config.strictRemote && requestError instanceof Error && requestError.message.startsWith('Strict remote mode')) {
-      throw requestError;
-    }
-
-    config.diagnostics.requestErrors += 1;
-    config.diagnostics.fallbacks += 1;
-    addDiagnosticSample(config.diagnostics, `Request failed before valid action: ${getErrorMessage(requestError)}`);
-    if (config.strictRemote) {
-      throw new Error(`Strict remote mode blocked fallback after request failure: ${getErrorMessage(requestError)}`);
-    }
-
-    return chooseFallbackAction(legalActions);
-  }
-}
-
-async function requestOpenRouterCompletion(
-  config: {
-    label: string;
-    apiKey: string;
-    model: string;
-    baseUrl: string;
-    timeoutMs: number;
-    maxTokens: number;
-    diagnostics: RemoteDiagnostics;
-    usage: UsageAccumulator;
-  },
-  systemPrompt: string,
-  prompt: string,
-): Promise<{ raw: string }> {
-  const controller = new AbortController();
-  const timeoutId = globalThis.setTimeout(() => controller.abort(), config.timeoutMs);
-  config.diagnostics.requestsStarted += 1;
-  const response = await fetch(config.baseUrl, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${config.apiKey}`,
-      'Content-Type': 'application/json',
     },
-    body: JSON.stringify({
-      model: config.model,
-      temperature: 0,
-      max_tokens: config.maxTokens,
-      messages: [
-        {
-          role: 'system',
-          content: systemPrompt,
-        },
-        {
-          role: 'user',
-          content: prompt,
-        },
-      ],
-    }),
-    signal: controller.signal,
   });
 
-  try {
-    const data = (await response.json()) as OpenRouterResponse;
-    if (!response.ok) {
-      accumulateUsage(config.usage, data, prompt, '');
-      throw new Error(data.error?.message ?? `OpenRouter request failed with status ${response.status}`);
-    }
-
-    const raw = extractText(data);
-    accumulateUsage(config.usage, data, prompt, raw);
-    if (!raw) {
-      throw new Error('OpenRouter returned empty content.');
-    }
-
-    return { raw };
-  } finally {
-    globalThis.clearTimeout(timeoutId);
-  }
+  return createFunctionAgent({
+    id: agent.id,
+    label: agent.label,
+    agentType: 'openrouter',
+    async decideTurn(input, context) {
+      turnFailures.length = 0;
+      const action = await agent.decideTurn(input, context);
+      if (config.strictRemote && turnFailures.length > 0) {
+        throw new Error(`Strict remote mode blocked fallback: ${turnFailures[0]}`);
+      }
+      return action;
+    },
+  });
 }
 
-function extractText(data: OpenRouterResponse): string {
-  const content = data.choices?.[0]?.message?.content;
-
-  if (typeof content === 'string') {
-    return content;
+function estimateUsageFromStatus(target: UsageAccumulator, event: OpenRouterStatusEvent): void {
+  if (event.code === 'requesting') {
+    target.requests += 1;
+    target.promptTokens += estimateTokens(event.message);
   }
-
-  if (Array.isArray(content)) {
-    return content
-      .map((item) => item.text ?? item.content ?? '')
-      .join('')
-      .trim();
+  if (event.code === 'success' || event.code === 'repair_success') {
+    target.completionTokens += estimateTokens(event.message);
+    target.totalTokens = target.promptTokens + target.completionTokens;
   }
-
-  const reasoning = data.choices?.[0]?.message?.reasoning;
-  if (reasoning) {
-    return extractJSONObject(reasoning);
-  }
-
-  return '';
-}
-
-function extractJSONObject(raw: string): string {
-  const firstBrace = raw.indexOf('{');
-  const lastBrace = raw.lastIndexOf('}');
-  if (firstBrace === -1 || lastBrace === -1 || lastBrace <= firstBrace) {
-    return '';
-  }
-  return raw.slice(firstBrace, lastBrace + 1).trim();
-}
-
-function buildRepairPrompt(
-  legalActions: Parameters<typeof parseArenaChosenAction>[1],
-  repairMessage: string,
-): string {
-  const allowedOutputs = (legalActions ?? []).map((action) =>
-    action.kind === 'pass' ? '{"kind":"pass"}' : `{"kind":"play","actionId":"${action.actionId}"}`,
-  );
-  return [
-    `Previous reply invalid: ${repairMessage}`,
-    'Reply with exactly one JSON object and nothing else.',
-    'Allowed outputs:',
-    ...allowedOutputs,
-  ].join('\n');
-}
-
-function chooseFallbackAction(legalActions: Parameters<typeof parseArenaChosenAction>[1]): ArenaChosenAction {
-  const firstPlay = legalActions?.find((action) => action.kind === 'play');
-  if (firstPlay) {
-    return {
-      kind: 'play',
-      actionId: firstPlay.actionId,
-    };
-  }
-
-  if (legalActions?.some((action) => action.kind === 'pass')) {
-    return { kind: 'pass' };
-  }
-
-  throw new Error('No legal actions available for fallback.');
-}
-
-function accumulateUsage(target: UsageAccumulator, data: OpenRouterResponse, prompt: string, raw: string): void {
-  target.requests += 1;
-  target.promptTokens += data.usage?.prompt_tokens ?? estimateTokens(prompt);
-  target.completionTokens += data.usage?.completion_tokens ?? estimateTokens(raw);
-  target.totalTokens += data.usage?.total_tokens ?? estimateTokens(prompt) + estimateTokens(raw);
 }
 
 function createUsageAccumulator(): UsageAccumulator {

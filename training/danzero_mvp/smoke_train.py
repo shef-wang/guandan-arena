@@ -7,11 +7,7 @@ import torch
 import torch.nn.functional as F
 
 from policy_value_net import LegalActionPolicyValueNet
-
-
-STATE_DIM = 128
-ACTION_DIM = 32
-MAX_ACTIONS = 64
+from codec_config import STATE_DIM, ACTION_DIM, MAX_ACTIONS
 BATCH_SIZE = 16
 STEPS = 20
 

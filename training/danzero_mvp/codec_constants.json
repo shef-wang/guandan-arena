@@ -1,0 +1,11 @@
+{
+  "STATE_DIM": 82,
+  "ACTION_DIM": 60,
+  "MAX_ACTIONS": 200,
+  "RANKS": ["2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K", "A", "SJ", "BJ"],
+  "SUITS": ["clubs", "diamonds", "hearts", "spades", "joker"],
+  "PLAY_TYPES": [
+    "single", "pair", "triple", "full-house", "straight",
+    "pair-run", "triple-run", "bomb", "straight-flush", "joker-bomb"
+  ]
+}

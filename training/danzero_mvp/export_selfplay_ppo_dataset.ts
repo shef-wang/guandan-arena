@@ -219,20 +219,16 @@ async function main(): Promise<void> {
         team1Wins += 1;
       }
 
-      for (const step of pending) {
-        const targetReturn = step.team === state.result.winnerTeam ? state.result.levelDelta : -state.result.levelDelta;
-        const transition: SerializedTransition = {
-          state_features: step.stateFeatures,
-          action_features: step.actionFeatures,
-          chosen_action_index: step.chosenActionIndex,
-          old_log_prob: step.oldLogProb,
-          old_value: step.oldValue,
-          target_return: targetReturn,
-          advantage: targetReturn - step.oldValue,
-          entropy: step.entropy,
-        };
-        lines.push(JSON.stringify(transition));
-      }
+      const gaeLambda = Number(process.env.GAE_LAMBDA ?? '0.95');
+      const gamma = Number(process.env.GAMMA ?? '1.0');
+
+      const team0Steps = pending.filter((s) => s.team === 0);
+      const team1Steps = pending.filter((s) => s.team === 1);
+      const team0Return = 0 === state.result.winnerTeam ? state.result.levelDelta : -state.result.levelDelta;
+      const team1Return = 1 === state.result.winnerTeam ? state.result.levelDelta : -state.result.levelDelta;
+
+      computeGAEAndAppend(team0Steps, team0Return, gamma, gaeLambda, lines);
+      computeGAEAndAppend(team1Steps, team1Return, gamma, gaeLambda, lines);
     }
   } finally {
     await client.close();
@@ -256,6 +252,44 @@ async function main(): Promise<void> {
       2,
     ),
   );
+}
+
+function computeGAEAndAppend(
+  steps: PendingTransition[],
+  terminalReturn: number,
+  gamma: number,
+  gaeLambda: number,
+  lines: string[],
+): void {
+  if (steps.length === 0) return;
+
+  const T = steps.length;
+  const advantages = new Array<number>(T);
+  const returns = new Array<number>(T);
+
+  let gae = 0;
+  for (let t = T - 1; t >= 0; t--) {
+    const reward = t === T - 1 ? terminalReturn : 0;
+    const nextValue = t === T - 1 ? 0 : steps[t + 1].oldValue;
+    const delta = reward + gamma * nextValue - steps[t].oldValue;
+    gae = delta + gamma * gaeLambda * gae;
+    advantages[t] = gae;
+    returns[t] = gae + steps[t].oldValue;
+  }
+
+  for (let t = 0; t < T; t++) {
+    const transition: SerializedTransition = {
+      state_features: steps[t].stateFeatures,
+      action_features: steps[t].actionFeatures,
+      chosen_action_index: steps[t].chosenActionIndex,
+      old_log_prob: steps[t].oldLogProb,
+      old_value: steps[t].oldValue,
+      target_return: returns[t],
+      advantage: advantages[t],
+      entropy: steps[t].entropy,
+    };
+    lines.push(JSON.stringify(transition));
+  }
 }
 
 function toArenaChosenAction(action: ArenaTurnInput['legalActions'][number]): ArenaChosenAction {

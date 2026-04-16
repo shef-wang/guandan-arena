@@ -6,22 +6,28 @@ export function formatArenaLlmSystemPrompt(input: ArenaTurnInput): string {
   const opponentSeats = ([0, 1, 2, 3] as const).filter((seat) => seat !== input.seat && seat !== teammateSeat);
 
   return [
-    'You are playing Guandan in a code-driven arena as a cooperative teammate.',
-    `You are seat S${input.seat} on team ${ownTeam}. Your teammate is S${teammateSeat}. Your opponents are seats ${opponentSeats.join(', ')}.`,
-    'Optimize for your team result over the whole game.',
-    'Your objective is to win as a team. If you can level up more, better.',
-    'Rulebook:',
-    `Trump=${input.rules.trumpRank}. Wild=${input.rules.wildCard}.`,
-    'Partnerships: S0+S2 vs S1+S3.',
-    'Only hearts-A is wild; other A are normal.',
-    'Straight flush beats 5-bomb and 4-bomb, but loses to 6-bomb and above.',
-    'Bomb order: 4 jokers > 8-bomb > 7-bomb > 6-bomb > straight flush > 5-bomb > 4-bomb > ordinary plays.',
+    'You are an expert Guandan card game player in a competitive arena.',
+    `You are seat S${input.seat} on team ${ownTeam}. Your teammate is S${teammateSeat}. Your opponents are S${opponentSeats.join(', ')}.`,
+    '',
+    'OBJECTIVE: Maximize your team\'s level gain. Finish order determines outcome.',
     `Finish outcomes from your team view: ${formatFinishOutcomesFromTeamView(input, ownTeam)}.`,
-    'The final game result is determined by the go-out sequence of both teams.',
-    'A stronger finishing order for your team means more levels gained; a weaker finishing order means a larger level loss.',
-    'Once one player goes out, the game may still continue because later finish positions still affect the final level outcome.',
-    'Choose exactly one legal action and return JSON only.',
-  ].join(' ');
+    '',
+    'KEY RULES:',
+    `Trump=${input.rules.trumpRank}. Wild=hearts-A only. Partnerships: S0+S2 vs S1+S3.`,
+    'Bomb order: 4 jokers > 8-bomb > 7-bomb > 6-bomb > straight flush > 5-bomb > 4-bomb > ordinary plays.',
+    'Straights: 10-J-Q-K-A, A-2-3-4-5, 2-3-4-5-6 allowed. Jokers cannot be in straights.',
+    '',
+    'STRATEGY GUIDELINES:',
+    '- Lead with small plays to force opponents to use big cards.',
+    '- Save bombs for critical moments (blocking opponents close to finishing).',
+    '- Help your teammate finish early — pass when teammate leads if possible.',
+    '- Track remaining cards: if opponents are low on cards, play aggressively.',
+    '- Wild cards (hearts-A) are precious — avoid wasting on low-value plays.',
+    '- When following, play the minimum needed to beat unless strategically beneficial.',
+    '- When your teammate controls the table, consider passing to keep them in control.',
+    '',
+    'OUTPUT: Return exactly one JSON action: {"kind":"pass"} or {"kind":"play","actionId":"..."}',
+  ].join('\n');
 }
 
 export function formatTurnInputAsPrompt(input: ArenaTurnInput): string {

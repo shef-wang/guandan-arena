@@ -46,11 +46,13 @@ export const ARENA_RULES_SUMMARY: ArenaRulesSummary = {
 export function createFunctionAgent(config: {
   id: string;
   label: string;
+  agentType?: GuandanArenaAgent['agentType'];
   decideTurn: GuandanArenaAgent['decideTurn'];
 }): GuandanArenaAgent {
   return {
     id: config.id,
     label: config.label,
+    agentType: config.agentType ?? 'custom',
     decideTurn: config.decideTurn,
   };
 }
@@ -67,6 +69,7 @@ export function createHeuristicAgent(config?: { id?: string; label?: string; pro
         : config?.profile === 'legacy-v1'
           ? 'guandan-ai v1'
           : 'guandan-ai v2 balanced'),
+    agentType: 'heuristic',
     decideTurn(input, context) {
       const decision = chooseAiAction(context.state, context.seat, config?.profile ?? 'legacy-v1');
       if (decision.type === 'pass' || !decision.play) {
@@ -85,6 +88,7 @@ export function createPromptAgent(config: ArenaPromptAgentConfig): GuandanArenaA
   return {
     id: config.id,
     label: config.label,
+    agentType: 'custom',
     async decideTurn(input, context) {
       const raw = await config.completeTurn({
         prompt: formatTurnInputAsPrompt(input),

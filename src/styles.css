@@ -172,16 +172,21 @@ button {
 }
 
 .start-screen {
-  width: min(100vw - 32px, 1400px);
+  width: min(100vw - 32px, 1200px);
   min-height: calc(100vh - 32px);
   display: flex;
   flex-direction: column;
   justify-content: center;
-  gap: 28px;
+  gap: 34px;
+  margin: 0 auto;
+  padding: 24px 0;
 }
 
 .start-hero {
-  max-width: 760px;
+  max-width: 840px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
 .start-hero h1 {
@@ -194,14 +199,15 @@ button {
 .start-hero p {
   margin: 0;
   color: rgba(236, 242, 255, 0.78);
-  font-size: 1.02rem;
-  line-height: 1.7;
+  font-size: 1.04rem;
+  line-height: 1.72;
+  max-width: 760px;
 }
 
 .start-mode-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 18px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 20px;
 }
 
 .start-mode-card {
@@ -231,10 +237,22 @@ button {
     inset 0 1px 0 rgba(255, 255, 255, 0.08);
 }
 
+.start-mode-card.practice {
+  background:
+    radial-gradient(circle at 85% 18%, rgba(124, 240, 189, 0.18), transparent 24%),
+    linear-gradient(180deg, rgba(14, 34, 84, 0.82), rgba(8, 23, 53, 0.9));
+}
+
 .start-mode-card.arena {
   background:
     radial-gradient(circle at 82% 16%, rgba(255, 197, 117, 0.18), transparent 24%),
     linear-gradient(180deg, rgba(11, 41, 91, 0.82), rgba(7, 25, 58, 0.9));
+}
+
+.start-mode-card.multiplayer {
+  background:
+    radial-gradient(circle at 82% 16%, rgba(140, 176, 255, 0.2), transparent 24%),
+    linear-gradient(180deg, rgba(21, 42, 99, 0.82), rgba(9, 22, 60, 0.9));
 }
 
 .start-mode-kicker,
@@ -264,6 +282,16 @@ button {
 
 .start-mode-footer {
   font-size: 0.82rem;
+}
+
+.start-extra-links {
+  display: flex;
+  justify-content: flex-start;
+}
+
+.start-extra-links .ghost-button {
+  padding: 11px 18px;
+  text-decoration: none;
 }
 
 .arena-setup-shell {
@@ -613,7 +641,7 @@ button {
   padding: 0 34px 12px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 14px;
 }
 
 .control-row {
@@ -621,15 +649,17 @@ button {
   justify-content: center;
   gap: 16px;
   flex-wrap: wrap;
-  margin-bottom: 4px;
+  margin-bottom: 6px;
+  position: relative;
+  z-index: 8;
 }
 
 .primary-button,
 .secondary-button,
 .control-row .ghost-button {
   min-width: 160px;
-  padding: 14px 24px;
-  font-size: 1.05rem;
+  padding: 12px 20px;
+  font-size: 1rem;
 }
 
 .primary-button {
@@ -661,6 +691,8 @@ button {
   flex-direction: column;
   gap: 8px;
   padding-right: 340px;
+  position: relative;
+  z-index: 2;
 }
 
 .human-headline {
@@ -700,7 +732,7 @@ button {
   position: absolute;
   right: 34px;
   bottom: 24px;
-  z-index: 4;
+  z-index: 8;
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -824,15 +856,17 @@ button {
   align-items: flex-end;
   justify-content: center;
   gap: 6px;
-  min-height: 190px;
-  padding: 0 8px;
+  min-height: 174px;
+  padding: 4px 8px 0;
+  position: relative;
+  z-index: 2;
 }
 
 .hand-column {
   position: relative;
-  height: 190px;
-  width: 74px;
-  min-width: 74px;
+  height: 174px;
+  width: 68px;
+  min-width: 68px;
 }
 
 .stack-card-button {
@@ -898,8 +932,8 @@ button {
 }
 
 .playing-card.grouped {
-  width: 74px;
-  height: 112px;
+  width: 68px;
+  height: 102px;
 }
 
 .playing-card.compact {
@@ -1022,9 +1056,9 @@ button {
 }
 
 .hud-item {
-  min-width: 180px;
+  min-width: 170px;
   flex: 1;
-  padding: 12px 14px;
+  padding: 10px 12px;
   border-radius: 16px;
   background: rgba(9, 22, 53, 0.54);
   border: 1px solid rgba(220, 236, 255, 0.14);
@@ -1038,7 +1072,7 @@ button {
 .hud-item strong {
   display: block;
   margin-top: 4px;
-  font-size: 1rem;
+  font-size: 0.95rem;
   color: rgba(247, 250, 255, 0.9);
 }
 
@@ -2010,6 +2044,10 @@ button {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .start-mode-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .table-seat.left,
   .table-seat.right,
   .ai-seat.left,
@@ -2027,13 +2065,13 @@ button {
   }
 
   .hand-column {
-    width: 62px;
-    min-width: 62px;
+    width: 58px;
+    min-width: 58px;
   }
 
   .playing-card.grouped {
-    width: 62px;
-    height: 94px;
+    width: 58px;
+    height: 88px;
   }
 
   .human-zone {
@@ -2082,6 +2120,10 @@ button {
     min-height: 100vh;
     padding: 18px 14px 24px;
     justify-content: center;
+  }
+
+  .start-hero h1 {
+    font-size: clamp(2rem, 9vw, 3.4rem);
   }
 
   .arena-setup-shell {

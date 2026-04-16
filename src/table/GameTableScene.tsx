@@ -19,11 +19,12 @@ export interface GameTableSceneProps {
   game: GameState;
   leftBadges: TableBadge[];
   rightBadges: TableBadge[];
-  centerPanel: {
+  centerPanel?: {
     eyebrow: string;
     title: string;
     note?: string;
   };
+  showCenterPanel?: boolean;
   seats: TableSeatConfig[];
   onReset?: () => void;
   resetLabel?: string;
@@ -37,6 +38,7 @@ export default function GameTableScene({
   leftBadges,
   rightBadges,
   centerPanel,
+  showCenterPanel = true,
   seats,
   onReset,
   resetLabel = '重新发牌',
@@ -74,11 +76,13 @@ export default function GameTableScene({
           <TableSeatPanel game={game} key={`${seatConfig.position}-${seatConfig.seat}`} {...seatConfig} />
         ))}
 
-        <section className="table-center-panel">
-          <span className="eyebrow">{centerPanel.eyebrow}</span>
-          <strong>{centerPanel.title}</strong>
-          {centerPanel.note ? <span className="table-center-note">{centerPanel.note}</span> : null}
-        </section>
+        {showCenterPanel && centerPanel ? (
+          <section className="table-center-panel">
+            <span className="eyebrow">{centerPanel.eyebrow}</span>
+            <strong>{centerPanel.title}</strong>
+            {centerPanel.note ? <span className="table-center-note">{centerPanel.note}</span> : null}
+          </section>
+        ) : null}
 
         {insideStage}
       </main>

@@ -9,6 +9,7 @@ import torch.nn.functional as F
 
 from policy_value_net import LegalActionPolicyValueNet
 from runtime_utils import configure_runtime, pick_device
+from codec_config import MAX_ACTIONS
 
 
 def load_checkpoint(path: str, device: torch.device) -> tuple[LegalActionPolicyValueNet, dict]:
@@ -27,8 +28,12 @@ def load_checkpoint(path: str, device: torch.device) -> tuple[LegalActionPolicyV
 
 def evaluate_request(model: LegalActionPolicyValueNet, device: torch.device, request: dict) -> dict:
     state = torch.tensor(request["state_features"], dtype=torch.float32, device=device).unsqueeze(0)
-    actions = torch.tensor(request["action_features"], dtype=torch.float32, device=device).unsqueeze(0)
-    legal_mask = torch.ones((1, actions.shape[1]), dtype=torch.bool, device=device)
+    raw_actions = request["action_features"]
+    num_legal = len(raw_actions)
+    padded = raw_actions + [[0.0] * len(raw_actions[0])] * (MAX_ACTIONS - num_legal) if num_legal < MAX_ACTIONS else raw_actions[:MAX_ACTIONS]
+    actions = torch.tensor([padded], dtype=torch.float32, device=device)
+    legal_mask = torch.zeros((1, MAX_ACTIONS), dtype=torch.bool, device=device)
+    legal_mask[0, :num_legal] = True
     sample = bool(request.get("sample", False))
     temperature = max(float(request.get("temperature", 1.0)), 1e-4)
 

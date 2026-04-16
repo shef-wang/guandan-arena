@@ -169,18 +169,8 @@ export default function PracticeTable() {
 
   return (
     <GameTableScene
-      centerPanel={{
-        eyebrow: game.result ? '终局结果' : '当前状态',
-        title: game.result ? `${formatPlacementKey(game.result.placementKey)} · ${game.result.badge}` : game.message,
-        note: chosenPlay
-          ? `你的选择：${chosenPlay.label}`
-          : selectedCards.length > 0
-            ? '当前选牌不是合法牌型'
-            : humanTurn
-              ? '轮到你行动，可以选牌、理牌或不出。'
-              : '当前由 AI 行动。',
-      }}
       game={game}
+      showCenterPanel={false}
       insideStage={
         <section className="bottom-play-area">
           <div className="control-row">
@@ -262,7 +252,7 @@ export default function PracticeTable() {
                         onClick={() => handleToggleCard(card, group, index)}
                         style={{
                           zIndex: group.length - index,
-                          transform: `translateY(${-index * 44}px)`,
+                          transform: `translateY(${-index * 36}px)`,
                         }}
                         type="button"
                       >
@@ -283,7 +273,6 @@ export default function PracticeTable() {
       onReset={handleNewGame}
       resetLabel="重新发牌"
       rightBadges={[
-        { label: '当前轮到', value: game.players[game.currentPlayer].name },
         { label: '结果', value: game.result ? game.result.badge : '进行中' },
       ]}
       seats={[

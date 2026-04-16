@@ -91,6 +91,7 @@ export function createOpenRouterAgent(config: OpenRouterAgentConfig): GuandanAre
   return {
     id: config.id,
     label: config.label,
+    agentType: 'openrouter',
     async decideTurn(input) {
       const systemPrompt = formatArenaLlmSystemPrompt(input);
       const basePrompt = formatTurnInputAsPrompt(input);
@@ -120,6 +121,7 @@ export function createOpenRouterRerankerAgent(
   return {
     id: config.id,
     label: config.label,
+    agentType: 'llmreranker',
     async decideTurn(input, context) {
       const requestConfig: OpenRouterAgentConfig = {
         ...config,

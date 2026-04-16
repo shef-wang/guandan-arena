@@ -121,9 +121,12 @@ export interface ArenaPromptAgentConfig {
   ) => Promise<string | ArenaChosenAction> | string | ArenaChosenAction;
 }
 
+export type AgentType = 'heuristic' | 'openrouter' | 'llmreranker' | 'learned-policy' | 'human' | 'custom';
+
 export interface GuandanArenaAgent {
   id: string;
   label: string;
+  agentType: AgentType;
   decideTurn: (
     input: ArenaTurnInput,
     context: ArenaTurnContext,

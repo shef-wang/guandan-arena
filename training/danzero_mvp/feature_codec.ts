@@ -1,20 +1,14 @@
 import type { ArenaActionOption, ArenaCardView, ArenaPlayView, ArenaTurnInput } from '../../src/arena/types';
 import type { PlayType, Rank, Seat, Suit } from '../../src/game/types';
+import codecConstants from './codec_constants.json';
 
-const RANKS: Rank[] = ['2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A', 'SJ', 'BJ'];
-const SUITS: Suit[] = ['clubs', 'diamonds', 'hearts', 'spades', 'joker'];
-const PLAY_TYPES: PlayType[] = [
-  'single',
-  'pair',
-  'triple',
-  'full-house',
-  'straight',
-  'pair-run',
-  'triple-run',
-  'bomb',
-  'straight-flush',
-  'joker-bomb',
-];
+export const STATE_DIM = codecConstants.STATE_DIM;
+export const ACTION_DIM = codecConstants.ACTION_DIM;
+export const MAX_ACTIONS = codecConstants.MAX_ACTIONS;
+
+const RANKS: Rank[] = codecConstants.RANKS as Rank[];
+const SUITS: Suit[] = codecConstants.SUITS as Suit[];
+const PLAY_TYPES: PlayType[] = codecConstants.PLAY_TYPES as PlayType[];
 
 const MAX_NORMAL_RANK_COUNT = 8;
 const MAX_ACTION_RANK_COUNT = 4;
