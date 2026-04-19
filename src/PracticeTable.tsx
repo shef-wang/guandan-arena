@@ -1,16 +1,27 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { chooseAiAction } from './game/ai';
 import { enumerateExactPlays, filterLegalPlays, getPlayDisplayRank, sortPlayOptionsForContext } from './game/rules';
 import { applyPass, applyPlay, createNewGame, getSeatStatus } from './game/state';
 import type { Card, GameState, PlayerState, Suit } from './game/types';
 import GameTableScene from './table/GameTableScene';
 import { PlayingCard, formatPlacementKey } from './ui/tableWidgets';
+import { applyArenaChosenAction, buildArenaTurnInput } from './arena/engine';
+import { createOpenRouterAgent } from './arena/openrouter';
+
+type PracticeAiMode = 'legacy' | 'openrouter';
+
+const DEEPSEEK_V3_MODEL = 'deepseek/deepseek-chat-v3-0324';
+const PRACTICE_OPENROUTER_KEY_STORAGE = 'guandan-practice-openrouter-key';
+const PRACTICE_LEGACY_PROFILE = 'legacy-v2.6' as const;
 
 export default function PracticeTable() {
   const [game, setGame] = useState<GameState>(() => createNewGame());
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [selectedOptionIndex, setSelectedOptionIndex] = useState(0);
   const [organizedGroups, setOrganizedGroups] = useState<string[][]>([]);
+  const [aiMode, setAiMode] = useState<PracticeAiMode>('legacy');
+  const [openRouterApiKey, setOpenRouterApiKey] = useState('');
+  const [llmStatus, setLlmStatus] = useState('未启用');
 
   const human = game.players[0];
   const humanGroups = buildDisplayGroups(human.hand, organizedGroups);
@@ -61,6 +72,53 @@ export default function PracticeTable() {
   }, [human.hand]);
 
   useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    const saved = window.localStorage.getItem(PRACTICE_OPENROUTER_KEY_STORAGE);
+    if (saved) {
+      setOpenRouterApiKey(saved);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    if (openRouterApiKey.trim()) {
+      window.localStorage.setItem(PRACTICE_OPENROUTER_KEY_STORAGE, openRouterApiKey.trim());
+    } else {
+      window.localStorage.removeItem(PRACTICE_OPENROUTER_KEY_STORAGE);
+    }
+  }, [openRouterApiKey]);
+
+  const hasOpenRouterKey = openRouterApiKey.trim().length > 0;
+  const aiModeLabel = aiMode === 'openrouter' ? 'OpenRouter / DeepSeek v3' : '内置 legacy-v2.6';
+
+  const openRouterSeatAgent = useMemo(() => {
+    if (!hasOpenRouterKey) {
+      return null;
+    }
+
+    return createOpenRouterAgent({
+      id: 'practice-openrouter-agent',
+      label: 'Practice OpenRouter',
+      apiKey: openRouterApiKey.trim(),
+      model: DEEPSEEK_V3_MODEL,
+      siteName: 'Guandan Practice',
+      siteUrl: typeof window !== 'undefined' ? window.location.origin : undefined,
+      onStatus(event) {
+        setLlmStatus(`${event.code}: ${event.message}`);
+      },
+      timeoutMs: 20000,
+      maxTokens: 120,
+      temperature: 0.1,
+    });
+  }, [hasOpenRouterKey, openRouterApiKey]);
+
+  useEffect(() => {
     if (game.winnerTeam !== null || game.currentPlayer === 0) {
       return undefined;
     }
@@ -68,22 +126,48 @@ export default function PracticeTable() {
     const actingSeat = game.currentPlayer;
     const delay = 700 + Math.floor(Math.random() * 500);
     const timer = window.setTimeout(() => {
-      const decision = chooseAiAction(game, actingSeat);
-      setGame((current) => {
-        if (current.winnerTeam !== null || current.currentPlayer !== actingSeat) {
-          return current;
-        }
-
-        if (decision.type === 'play' && decision.play) {
-          return applyPlay(current, actingSeat, decision.play);
-        }
-
-        return applyPass(current, actingSeat);
-      });
+      void runAiTurn(actingSeat as 1 | 2 | 3);
     }, delay);
 
     return () => window.clearTimeout(timer);
-  }, [game]);
+  }, [game, aiMode, openRouterSeatAgent]);
+
+  async function runAiTurn(actingSeat: 1 | 2 | 3): Promise<void> {
+    if (aiMode === 'openrouter' && openRouterSeatAgent) {
+      try {
+        const input = buildArenaTurnInput(game, actingSeat);
+        const action = await openRouterSeatAgent.decideTurn(input, {
+          seat: actingSeat,
+          state: game,
+        });
+
+        setGame((current) => {
+          if (current.winnerTeam !== null || current.currentPlayer !== actingSeat) {
+            return current;
+          }
+
+          return applyArenaChosenAction(current, actingSeat, action);
+        });
+        return;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'OpenRouter request failed';
+        setLlmStatus(`fallback: ${message}`);
+      }
+    }
+
+    const decision = chooseAiAction(game, actingSeat, PRACTICE_LEGACY_PROFILE);
+    setGame((current) => {
+      if (current.winnerTeam !== null || current.currentPlayer !== actingSeat) {
+        return current;
+      }
+
+      if (decision.type === 'play' && decision.play) {
+        return applyPlay(current, actingSeat, decision.play);
+      }
+
+      return applyPass(current, actingSeat);
+    });
+  }
 
   const humanTurn = game.currentPlayer === 0 && game.winnerTeam === null;
   const canPass = humanTurn && game.tablePlay !== null;
@@ -298,6 +382,39 @@ export default function PracticeTable() {
             <span className="label">{game.result ? '分列/结果' : '完成顺序'}</span>
             <strong>{game.result ? `${formatPlacementKey(game.result.placementKey)} · ${game.result.badge}` : renderFinishOrder(game)}</strong>
           </div>
+
+          <div className="hud-item wide">
+            <span className="label">LLM 对战（BYOK / OpenRouter）</span>
+            <strong>{aiModeLabel} · 仅支持 DeepSeek v3</strong>
+            <div className="hud-inline-actions">
+              <button
+                className={`ghost-button hud-inline-button ${aiMode === 'legacy' ? 'active' : ''}`}
+                onClick={() => setAiMode('legacy')}
+                type="button"
+              >
+                内置 AI
+              </button>
+              <button
+                className={`ghost-button hud-inline-button ${aiMode === 'openrouter' ? 'active' : ''}`}
+                disabled={!hasOpenRouterKey}
+                onClick={() => setAiMode('openrouter')}
+                type="button"
+              >
+                DeepSeek v3
+              </button>
+            </div>
+            <div className="hud-key-row">
+              <input
+                className="hud-key-input"
+                onChange={(event) => setOpenRouterApiKey(event.target.value)}
+                placeholder="sk-or-v1-...（你的 OpenRouter key）"
+                type="password"
+                value={openRouterApiKey}
+              />
+            </div>
+            <span className="label">状态：{aiMode === 'openrouter' ? llmStatus : '未启用'}</span>
+          </div>
+
           {selectedPlayOptions.length > 1 ? (
             <button
               className="link-button hud-switch"

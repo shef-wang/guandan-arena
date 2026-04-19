@@ -6,10 +6,11 @@ declare const process: {
 import { createHeuristicAgent, GuandanArenaMatch } from './engine';
 import { createSeededRandom } from '../game/cards';
 import { createNewGame } from '../game/state';
+import type { AiProfile } from '../game/ai';
 
 interface MatchSummary {
   index: number;
-  balancedTeam: 0 | 1;
+  challengerTeam: 0 | 1;
   winnerTeam: 0 | 1;
   levelDelta: 1 | 2 | 3;
   placementKey: string;
@@ -18,30 +19,32 @@ interface MatchSummary {
 async function main(): Promise<void> {
   const matches = Number(process.env.MATCHES ?? '20');
   const baseSeed = Number(process.env.BASE_SEED ?? '20260413');
+  const challengerProfile = parseProfile(process.env.CHALLENGER_PROFILE, 'legacy-v2.0');
+  const opponentProfile = parseProfile(process.env.OPPONENT_PROFILE, 'legacy-v1');
   const summaries: MatchSummary[] = [];
-  let balancedWins = 0;
-  let legacyWins = 0;
-  let balancedLevelGain = 0;
-  let legacyLevelGain = 0;
+  let challengerWins = 0;
+  let opponentWins = 0;
+  let challengerLevelGain = 0;
+  let opponentLevelGain = 0;
 
   for (let index = 0; index < matches; index += 1) {
-    const balancedTeam = (index % 2 === 0 ? 0 : 1) as 0 | 1;
+    const challengerTeam = (index % 2 === 0 ? 0 : 1) as 0 | 1;
     const random = createSeededRandom(baseSeed + index);
     const match = new GuandanArenaMatch({
       initialState: createNewGame(random),
       agents:
-        balancedTeam === 0
+        challengerTeam === 0
           ? [
-              createHeuristicAgent({ id: `balanced-${index}-0`, label: 'Balanced 0', profile: 'balanced-v2' }),
-              createHeuristicAgent({ id: `legacy-${index}-1`, label: 'Legacy 1', profile: 'legacy-v1' }),
-              createHeuristicAgent({ id: `balanced-${index}-2`, label: 'Balanced 2', profile: 'balanced-v2' }),
-              createHeuristicAgent({ id: `legacy-${index}-3`, label: 'Legacy 3', profile: 'legacy-v1' }),
+              createHeuristicAgent({ id: `challenger-${index}-0`, label: 'Challenger 0', profile: challengerProfile }),
+              createHeuristicAgent({ id: `opponent-${index}-1`, label: 'Opponent 1', profile: opponentProfile }),
+              createHeuristicAgent({ id: `challenger-${index}-2`, label: 'Challenger 2', profile: challengerProfile }),
+              createHeuristicAgent({ id: `opponent-${index}-3`, label: 'Opponent 3', profile: opponentProfile }),
             ]
           : [
-              createHeuristicAgent({ id: `legacy-${index}-0`, label: 'Legacy 0', profile: 'legacy-v1' }),
-              createHeuristicAgent({ id: `balanced-${index}-1`, label: 'Balanced 1', profile: 'balanced-v2' }),
-              createHeuristicAgent({ id: `legacy-${index}-2`, label: 'Legacy 2', profile: 'legacy-v1' }),
-              createHeuristicAgent({ id: `balanced-${index}-3`, label: 'Balanced 3', profile: 'balanced-v2' }),
+              createHeuristicAgent({ id: `opponent-${index}-0`, label: 'Opponent 0', profile: opponentProfile }),
+              createHeuristicAgent({ id: `challenger-${index}-1`, label: 'Challenger 1', profile: challengerProfile }),
+              createHeuristicAgent({ id: `opponent-${index}-2`, label: 'Opponent 2', profile: opponentProfile }),
+              createHeuristicAgent({ id: `challenger-${index}-3`, label: 'Challenger 3', profile: challengerProfile }),
             ],
     });
 
@@ -53,18 +56,18 @@ async function main(): Promise<void> {
     const winnerTeam = state.result.winnerTeam;
     summaries.push({
       index: index + 1,
-      balancedTeam,
+      challengerTeam,
       winnerTeam,
       levelDelta: state.result.levelDelta,
       placementKey: state.result.placementKey,
     });
 
-    if (winnerTeam === balancedTeam) {
-      balancedWins += 1;
-      balancedLevelGain += state.result.levelDelta;
+    if (winnerTeam === challengerTeam) {
+      challengerWins += 1;
+      challengerLevelGain += state.result.levelDelta;
     } else {
-      legacyWins += 1;
-      legacyLevelGain += state.result.levelDelta;
+      opponentWins += 1;
+      opponentLevelGain += state.result.levelDelta;
     }
   }
 
@@ -73,17 +76,17 @@ async function main(): Promise<void> {
       {
         matches,
         baseSeed,
-        balanced: {
-          profile: 'balanced-v2',
-          wins: balancedWins,
-          winRate: balancedWins / matches,
-          averageLevelGainOnWins: balancedWins > 0 ? balancedLevelGain / balancedWins : 0,
+        challenger: {
+          profile: challengerProfile,
+          wins: challengerWins,
+          winRate: challengerWins / matches,
+          averageLevelGainOnWins: challengerWins > 0 ? challengerLevelGain / challengerWins : 0,
         },
-        legacy: {
-          profile: 'legacy-v1',
-          wins: legacyWins,
-          winRate: legacyWins / matches,
-          averageLevelGainOnWins: legacyWins > 0 ? legacyLevelGain / legacyWins : 0,
+        opponent: {
+          profile: opponentProfile,
+          wins: opponentWins,
+          winRate: opponentWins / matches,
+          averageLevelGainOnWins: opponentWins > 0 ? opponentLevelGain / opponentWins : 0,
         },
         summaries,
       },
@@ -98,3 +101,15 @@ void main().catch((error: unknown) => {
   console.error(message);
   process.exitCode = 1;
 });
+
+function parseProfile(raw: string | undefined, fallback: AiProfile): AiProfile {
+  if (raw === 'baseline' || raw === 'legacy-v1' || raw === 'legacy-vR' || raw === 'balanced-v2') {
+    return raw;
+  }
+
+  if (raw && /^legacy-v2\.\d+$/.test(raw)) {
+    return raw as AiProfile;
+  }
+
+  return fallback;
+}

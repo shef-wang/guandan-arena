@@ -1,0 +1,15 @@
+{
+  "matches": 60,
+  "baseSeed": 20266416,
+  "checkpoint": "training/scorenet/checkpoints/ppo_iter_003/ppo/epoch_004.pt",
+  "learned": {
+    "wins": 27,
+    "winRate": 0.45,
+    "averageLevelGainOnWins": 2.1481481481481484
+  },
+  "legacy": {
+    "wins": 33,
+    "winRate": 0.55,
+    "averageLevelGainOnWins": 2.4242424242424243
+  }
+}

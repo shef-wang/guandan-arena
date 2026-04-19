@@ -58,16 +58,19 @@ export function createFunctionAgent(config: {
 }
 
 export function createHeuristicAgent(config?: { id?: string; label?: string; profile?: AiProfile }): GuandanArenaAgent {
+  const profile = config?.profile;
   return {
     id: config?.id ?? 'builtin-heuristic',
     label:
       config?.label ??
-      (config?.profile === 'baseline'
+      (profile === 'baseline'
         ? 'Builtin Baseline'
-        : config?.profile === 'legacy-vR'
+        : profile === 'legacy-vR'
           ? 'guandan-ai vR'
-        : config?.profile === 'legacy-v1'
+        : profile === 'legacy-v1'
           ? 'guandan-ai v1'
+        : profile?.startsWith('legacy-v2.')
+          ? `guandan-ai ${profile.replace('legacy-', '')}`
           : 'guandan-ai v2 balanced'),
     agentType: 'heuristic',
     decideTurn(input, context) {

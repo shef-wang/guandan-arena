@@ -306,12 +306,22 @@ function parseOpponentProfile(raw: string | undefined): AiProfile {
     return raw;
   }
 
+  if (raw && /^legacy-v2\.\d+$/.test(raw)) {
+    return raw as AiProfile;
+  }
+
   return 'balanced-v2';
 }
 
 function getOpponentLabel(profile: AiProfile): string {
   if (profile === 'legacy-v1') {
     return 'Legacy';
+  }
+  if (profile.startsWith('legacy-v2.')) {
+    return `Legacy ${profile.replace('legacy-', '')}`;
+  }
+  if (profile === 'legacy-v2.2') {
+    return 'Legacy v2.2';
   }
   if (profile === 'legacy-vR') {
     return 'Legacy vR';

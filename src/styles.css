@@ -1055,6 +1055,10 @@ button {
   flex-wrap: wrap;
 }
 
+.table-hud-secondary {
+  margin-top: 6px;
+}
+
 .hud-item {
   min-width: 170px;
   flex: 1;
@@ -1082,6 +1086,42 @@ button {
   color: #edf6ff;
   background: rgba(255, 255, 255, 0.08);
   border-color: rgba(255, 255, 255, 0.16);
+}
+
+.hud-inline-actions {
+  margin-top: 10px;
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.hud-inline-button {
+  padding: 9px 14px;
+  min-width: 110px;
+  border-radius: 12px;
+}
+
+.hud-inline-button.active {
+  border-color: rgba(125, 240, 191, 0.42);
+  background: rgba(125, 240, 191, 0.16);
+}
+
+.hud-key-row {
+  margin-top: 10px;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.hud-key-input {
+  min-width: 280px;
+  flex: 1;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(214, 229, 255, 0.18);
+  background: rgba(255, 255, 255, 0.04);
+  color: #f8f4ea;
 }
 
 .table-center-panel {
@@ -2223,6 +2263,11 @@ button {
   .arena-center-panel,
   .table-center-panel,
   .arena-control-rail {
+    width: 100%;
+  }
+
+  .hud-key-input {
+    min-width: 0;
     width: 100%;
   }
 }

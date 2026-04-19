@@ -1,0 +1,33 @@
+{
+  "system": {
+    "platform": "macOS-14.5-arm64-arm-64bit",
+    "machine": "arm64",
+    "processor": "Apple M2 Pro",
+    "cpu_count": 12,
+    "total_memory_gb": 16.0,
+    "device": "mps",
+    "mps_built": true,
+    "mps_available": true
+  },
+  "runtime": {
+    "cpu_fraction": 0.8,
+    "torch_num_threads": 9,
+    "torch_num_interop_threads": 6,
+    "mps_memory_fraction": 0.8
+  },
+  "history": [
+    {
+      "epoch": 1,
+      "train_loss": 2.046521,
+      "train_accuracy": 0.809249,
+      "valid_loss": 0.885022,
+      "valid_accuracy": 0.835443,
+      "valid_value_loss": 1.918833,
+      "epoch_seconds": 6.926,
+      "samples_per_second": 24.98,
+      "mps_current_allocated_mb": 11.71,
+      "mps_driver_allocated_mb": 168.08,
+      "mps_recommended_max_mb": 10922.67
+    }
+  ]
+}

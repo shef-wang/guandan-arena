@@ -1,0 +1,19 @@
+{
+  "matches": 60,
+  "baseSeed": 20271416,
+  "checkpoint": "training/scorenet/checkpoints/ppo_iter_004_retry/ppo/epoch_004.pt",
+  "learnedLevelGainTotal": 43,
+  "legacyLevelGainTotal": 91,
+  "netLevelDeltaFromLearnedPerspective": -48,
+  "netLevelDeltaPerMatch": -0.8,
+  "learned": {
+    "wins": 22,
+    "winRate": 0.36666666666666664,
+    "averageLevelGainOnWins": 1.9545454545454546
+  },
+  "legacy": {
+    "wins": 38,
+    "winRate": 0.6333333333333333,
+    "averageLevelGainOnWins": 2.3947368421052633
+  }
+}

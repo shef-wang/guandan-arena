@@ -2,7 +2,7 @@ import { filterLegalPlays, generateAllPlays, isSpecialPlay, sameTeam, usesRankPo
 import { applyPass, applyPlay, getNextActiveSeat } from './state';
 import type { AiDecision, Card, GameState, Play, Seat, Team } from './types';
 
-export type AiProfile = 'baseline' | 'legacy-v1' | 'legacy-vR' | 'balanced-v2';
+export type AiProfile = 'baseline' | 'legacy-v1' | `legacy-v2.${number}` | 'legacy-vR' | 'balanced-v2';
 
 interface ScoredPlay {
   play: Play;
@@ -15,13 +15,13 @@ export interface RankedAiActionCandidate {
   score: number;
 }
 
-interface PlanningCache {
+export interface PlanningCache {
   handScore: Map<string, number>;
   minTurns: Map<string, number>;
   greedyStats: Map<string, PlanStats>;
 }
 
-interface PlanStats {
+export interface PlanStats {
   turns: number;
   singles: number;
   pairs: number;
@@ -42,6 +42,12 @@ interface CandidateAction {
   priorScore: number;
 }
 
+interface LegacySignalProfile {
+  attackBias: number;
+  supportBias: number;
+  lane: Play['type'] | null;
+}
+
 const PLAN_SEARCH_DEPTH = 2;
 const PLAN_BRANCH_FACTOR = 5;
 const BALANCED_ROLLOUT_PLIES = 5;
@@ -50,6 +56,42 @@ const LEGACY_VR_TOP_K = 3;
 const LEGACY_VR_RANK_WEIGHTS = [3, 2, 1] as const;
 
 export function chooseAiAction(state: GameState, seat: Seat, profile: AiProfile = 'legacy-v1'): AiDecision {
+  if (profile.startsWith('legacy-v2.')) {
+    const suffix = profile.slice('legacy-v2.'.length);
+    if (suffix === '0') {
+      return chooseLegacyV20AiAction(state, seat);
+    }
+    if (suffix === '1') {
+      return chooseLegacyV21AiAction(state, seat);
+    }
+    if (suffix === '2') {
+      return chooseLegacyV22AiAction(state, seat);
+    }
+    if (suffix === '3') {
+      return chooseLegacyV23AiAction(state, seat);
+    }
+    if (suffix === '4') {
+      return chooseLegacyV24AiAction(state, seat);
+    }
+    if (suffix === '5') {
+      return chooseLegacyV25AiAction(state, seat);
+    }
+    if (suffix === '6') {
+      return chooseLegacyV26AiAction(state, seat);
+    }
+    if (suffix === '7') {
+      return chooseLegacyV27AiAction(state, seat);
+    }
+    if (suffix === '8') {
+      return chooseLegacyV28AiAction(state, seat);
+    }
+    if (suffix === '9') {
+      return chooseLegacyV29AiAction(state, seat);
+    }
+
+    return chooseLegacyV1AiAction(state, seat);
+  }
+
   switch (profile) {
     case 'baseline':
       return chooseBaselineAiAction(state, seat);
@@ -268,6 +310,277 @@ export function chooseBalancedV2AiAction(state: GameState, seat: Seat): AiDecisi
   };
 }
 
+export function chooseLegacyV20AiAction(state: GameState, seat: Seat): AiDecision {
+  const player = state.players[seat];
+  const legalPlays = filterLegalPlays(generateAllPlays(player.hand), state.tablePlay?.play ?? null);
+  if (legalPlays.length === 0) {
+    return { type: 'pass' };
+  }
+
+  const finishNow = legalPlays.find((play) => play.cards.length === player.hand.length);
+  if (finishNow) {
+    return { type: 'play', play: finishNow };
+  }
+
+  const cache = createPlanningCache();
+  const team = player.team;
+  const baselineScore = evaluateBalancedState(state, team, cache);
+  const ranked = rankLegacyV1ActionCandidates(state, seat).slice(0, 8);
+  const signals = buildLegacySignalProfiles(state);
+
+  let best = ranked[0];
+  let bestScore = Number.NEGATIVE_INFINITY;
+  for (const candidate of ranked) {
+    const action = toCandidateAction(candidate);
+    const nextState = applyCandidateAction(state, seat, action);
+    let score = candidate.score * 0.58;
+    score += (evaluateBalancedState(nextState, team, cache) - baselineScore) * 0.92;
+    score += rolloutBalancedState(nextState, team, 3, cache) * 0.22;
+    score += scoreLegacyV20SignalAdjustment(state, seat, action, signals);
+    if (score > bestScore) {
+      best = candidate;
+      bestScore = score;
+    }
+  }
+
+  return toAiDecision(best);
+}
+
+export function chooseLegacyV21AiAction(state: GameState, seat: Seat): AiDecision {
+  const player = state.players[seat];
+  const legalPlays = filterLegalPlays(generateAllPlays(player.hand), state.tablePlay?.play ?? null);
+  if (legalPlays.length === 0) {
+    return { type: 'pass' };
+  }
+
+  const finishNow = legalPlays.find((play) => play.cards.length === player.hand.length);
+  if (finishNow) {
+    return { type: 'play', play: finishNow };
+  }
+
+  const cache = createPlanningCache();
+  if (!state.tablePlay) {
+    const bestLead = scoreLegacyPlays(legalPlays, (play) => scoreLegacyLeadPlay(state, seat, play, cache) + scoreLegacyV21LeadAdjustment(state, seat, play))[0];
+    return {
+      type: 'play',
+      play: bestLead.play,
+    };
+  }
+
+  if (sameTeam(seat, state.tablePlay.owner)) {
+    return { type: 'pass' };
+  }
+
+  const passScore = scorePassAction(state, seat, cache);
+  const ranked = scoreLegacyPlays(legalPlays, (play) => scoreLegacyResponsePlay(state, seat, play, cache) + scoreLegacyV21ResponseAdjustment(state, seat, play));
+  const best = ranked[0];
+  const bestOrdinary = ranked.find((entry) => !isSpecialPlay(entry.play));
+  const urgentOpponent = isUrgentOpponentTurn(state, seat);
+
+  if (bestOrdinary && bestOrdinary.score >= best.score - 130 && bestOrdinary.score >= passScore - 15) {
+    return { type: 'play', play: bestOrdinary.play };
+  }
+
+  if (!isSpecialPlay(best.play) && best.score >= passScore - 10) {
+    return { type: 'play', play: best.play };
+  }
+
+  if (isSpecialPlay(best.play) && urgentOpponent && best.score >= passScore - 40) {
+    return { type: 'play', play: best.play };
+  }
+
+  return { type: 'pass' };
+}
+
+export function chooseLegacyV22AiAction(state: GameState, seat: Seat): AiDecision {
+  if (seat % 2 === 0) {
+    return chooseLegacyV1AiAction(state, seat);
+  }
+
+  return chooseLegacyV21AiAction(state, seat);
+}
+
+export function chooseLegacyV23AiAction(state: GameState, seat: Seat): AiDecision {
+  if (seat % 2 === 0) {
+    return chooseLegacyV21AiAction(state, seat);
+  }
+
+  return chooseLegacyV1AiAction(state, seat);
+}
+
+export function chooseLegacyV24AiAction(state: GameState, seat: Seat): AiDecision {
+  const player = state.players[seat];
+  const legalPlays = filterLegalPlays(generateAllPlays(player.hand), state.tablePlay?.play ?? null);
+  if (legalPlays.length === 0) {
+    return { type: 'pass' };
+  }
+
+  const finishNow = legalPlays.find((play) => play.cards.length === player.hand.length);
+  if (finishNow) {
+    return { type: 'play', play: finishNow };
+  }
+
+  const cache = createPlanningCache();
+  const team = player.team;
+  const baselineScore = evaluateBalancedState(state, team, cache);
+  const ranked = rankLegacyV1ActionCandidates(state, seat).slice(0, 6);
+
+  let best = ranked[0];
+  let bestScore = Number.NEGATIVE_INFINITY;
+  for (const candidate of ranked) {
+    const action = toCandidateAction(candidate);
+    const nextState = applyCandidateAction(state, seat, action);
+    let score = candidate.score * 0.55;
+    score += (evaluateBalancedState(nextState, team, cache) - baselineScore) * 1.05;
+    score += rolloutBalancedState(nextState, team, 2, cache) * 0.18;
+    score += scoreLegacyV21ActionAdjustment(state, seat, action);
+
+    if (!nextState.result) {
+      const replySeat = nextState.currentPlayer;
+      const reply = chooseLegacyV1AiAction(nextState, replySeat);
+      const replyState = applyAiDecision(nextState, replySeat, reply);
+      score += (evaluateBalancedState(replyState, team, cache) - baselineScore) * 0.62;
+      if (!sameTeam(seat, replySeat)) {
+        score -= 16;
+      }
+    }
+
+    if (score > bestScore) {
+      best = candidate;
+      bestScore = score;
+    }
+  }
+
+  return toAiDecision(best);
+}
+
+export function chooseLegacyV25AiAction(state: GameState, seat: Seat): AiDecision {
+  const player = state.players[seat];
+  const legalPlays = filterLegalPlays(generateAllPlays(player.hand), state.tablePlay?.play ?? null);
+  if (legalPlays.length === 0) {
+    return { type: 'pass' };
+  }
+
+  const finishNow = legalPlays.find((play) => play.cards.length === player.hand.length);
+  if (finishNow) {
+    return { type: 'play', play: finishNow };
+  }
+
+  const cache = createPlanningCache();
+  const team = player.team;
+  const baselineScore = evaluateBalancedState(state, team, cache);
+  const ranked = rankLegacyV1ActionCandidates(state, seat).slice(0, 4);
+
+  let best = ranked[0];
+  let bestScore = Number.NEGATIVE_INFINITY;
+  for (const candidate of ranked) {
+    const action = toCandidateAction(candidate);
+    const nextState = applyCandidateAction(state, seat, action);
+    const rolloutState = simulateLegacyRolloutState(nextState, 8);
+    let score = candidate.score * 0.45;
+    score += (evaluateBalancedState(nextState, team, cache) - baselineScore) * 0.65;
+    score += (evaluateBalancedState(rolloutState, team, cache) - baselineScore) * 0.9;
+    score += scoreLegacyV21ActionAdjustment(state, seat, action) * 0.5;
+
+    if (score > bestScore) {
+      best = candidate;
+      bestScore = score;
+    }
+  }
+
+  return toAiDecision(best);
+}
+
+export function chooseLegacyV26AiAction(state: GameState, seat: Seat): AiDecision {
+  if (seat % 2 === 0) {
+    return chooseLegacyV1AiAction(state, seat);
+  }
+
+  const player = state.players[seat];
+  if (state.actionHistory.length >= 14 || player.hand.length <= 9) {
+    return chooseLegacyV1AiAction(state, seat);
+  }
+
+  const legalPlays = filterLegalPlays(generateAllPlays(player.hand), state.tablePlay?.play ?? null);
+  if (legalPlays.length === 0) {
+    return { type: 'pass' };
+  }
+
+  const finishNow = legalPlays.find((play) => play.cards.length === player.hand.length);
+  if (finishNow) {
+    return { type: 'play', play: finishNow };
+  }
+
+  const team = player.team;
+  const ranked = rankLegacyV1ActionCandidates(state, seat).slice(0, 4);
+  let best = ranked[0];
+  let bestScore = Number.NEGATIVE_INFINITY;
+  for (const candidate of ranked) {
+    const action = toCandidateAction(candidate);
+    const nextState = applyCandidateAction(state, seat, action);
+    const terminalState = simulateLegacyV1ToTerminal(nextState, 220);
+    let score = candidate.score * 0.22;
+    score += scoreTerminalTeamOutcome(terminalState, team);
+    score += scoreLegacyV21ActionAdjustment(state, seat, action);
+
+    if (score > bestScore) {
+      best = candidate;
+      bestScore = score;
+    }
+  }
+
+  return toAiDecision(best);
+}
+
+export function chooseLegacyV27AiAction(state: GameState, seat: Seat): AiDecision {
+  const player = state.players[seat];
+  const legalPlays = filterLegalPlays(generateAllPlays(player.hand), state.tablePlay?.play ?? null);
+  if (legalPlays.length === 0) {
+    return { type: 'pass' };
+  }
+
+  const finishNow = legalPlays.find((play) => play.cards.length === player.hand.length);
+  if (finishNow) {
+    return { type: 'play', play: finishNow };
+  }
+
+  if (state.actionHistory.length >= 14 || player.hand.length <= 9) {
+    return chooseLegacyV26AiAction(state, seat);
+  }
+
+  const team = player.team;
+  const ranked = rankLegacyV1ActionCandidates(state, seat).slice(0, 4);
+  let best = ranked[0];
+  let bestScore = Number.NEGATIVE_INFINITY;
+  for (const candidate of ranked) {
+    const action = toCandidateAction(candidate);
+    const nextState = applyCandidateAction(state, seat, action);
+    const terminalState = simulateLegacyV1ToTerminal(nextState, 220);
+    let score = candidate.score * 0.35;
+    score += scoreLegacyV21ActionAdjustment(state, seat, action) * 0.4;
+    score += scoreTerminalTeamOutcome(terminalState, team);
+
+    if (score > bestScore) {
+      best = candidate;
+      bestScore = score;
+    }
+  }
+
+  return toAiDecision(best);
+}
+
+export function chooseLegacyV28AiAction(state: GameState, seat: Seat): AiDecision {
+  return chooseLegacyV27AiAction(state, seat);
+}
+
+export function chooseLegacyV29AiAction(state: GameState, seat: Seat): AiDecision {
+  if (state.actionHistory.length >= 16 || state.players[seat].hand.length <= 10) {
+    return chooseLegacyV26AiAction(state, seat);
+  }
+
+  return chooseLegacyV27AiAction(state, seat);
+}
+
 function toAiDecision(candidate: RankedAiActionCandidate): AiDecision {
   if (candidate.type === 'play' && candidate.play) {
     return {
@@ -277,6 +590,338 @@ function toAiDecision(candidate: RankedAiActionCandidate): AiDecision {
   }
 
   return { type: 'pass' };
+}
+
+function toCandidateAction(candidate: RankedAiActionCandidate): CandidateAction {
+  if (candidate.type === 'play' && candidate.play) {
+    return {
+      type: 'play',
+      play: candidate.play,
+      priorScore: candidate.score,
+    };
+  }
+
+  return {
+    type: 'pass',
+    priorScore: candidate.score,
+  };
+}
+
+function scoreLegacyV21ActionAdjustment(state: GameState, seat: Seat, action: CandidateAction): number {
+  if (action.type === 'pass') {
+    if (state.tablePlay && sameTeam(seat, state.tablePlay.owner)) {
+      return 95;
+    }
+    return -10;
+  }
+
+  return state.tablePlay
+    ? scoreLegacyV21ResponseAdjustment(state, seat, action.play!)
+    : scoreLegacyV21LeadAdjustment(state, seat, action.play!);
+}
+
+function applyAiDecision(state: GameState, seat: Seat, decision: AiDecision): GameState {
+  if (decision.type === 'play' && decision.play) {
+    return applyPlay(state, seat, decision.play);
+  }
+
+  return applyPass(state, seat);
+}
+
+function simulateLegacyRolloutState(state: GameState, plies: number): GameState {
+  let current = state;
+  for (let ply = 0; ply < plies; ply += 1) {
+    if (current.result) {
+      return current;
+    }
+
+    const actor = current.currentPlayer;
+    const decision = chooseLegacyV1AiAction(current, actor);
+    current = applyAiDecision(current, actor, decision);
+  }
+
+  return current;
+}
+
+function simulateLegacyV1ToTerminal(state: GameState, maxSteps: number): GameState {
+  let current = state;
+  for (let step = 0; step < maxSteps; step += 1) {
+    if (current.result) {
+      return current;
+    }
+
+    const actor = current.currentPlayer;
+    const decision = chooseLegacyV1AiAction(current, actor);
+    current = applyAiDecision(current, actor, decision);
+  }
+
+  return current;
+}
+
+function simulatePolicyToTerminal(
+  state: GameState,
+  maxSteps: number,
+  chooseDecision: (state: GameState, seat: Seat) => AiDecision,
+): GameState {
+  let current = state;
+  for (let step = 0; step < maxSteps; step += 1) {
+    if (current.result) {
+      return current;
+    }
+
+    const actor = current.currentPlayer;
+    const decision = chooseDecision(current, actor);
+    current = applyAiDecision(current, actor, decision);
+  }
+
+  return current;
+}
+
+function simulateProfileToTerminal(state: GameState, profile: AiProfile, maxSteps: number): GameState {
+  let current = state;
+  for (let step = 0; step < maxSteps; step += 1) {
+    if (current.result) {
+      return current;
+    }
+
+    const actor = current.currentPlayer;
+    const decision = chooseAiAction(current, actor, profile);
+    current = applyAiDecision(current, actor, decision);
+  }
+
+  return current;
+}
+
+function simulateProfileRolloutState(state: GameState, profile: AiProfile, plies: number): GameState {
+  let current = state;
+  for (let step = 0; step < plies; step += 1) {
+    if (current.result) {
+      return current;
+    }
+
+    const actor = current.currentPlayer;
+    const decision = chooseAiAction(current, actor, profile);
+    current = applyAiDecision(current, actor, decision);
+  }
+
+  return current;
+}
+
+function scoreTerminalTeamOutcome(state: GameState, rootTeam: Team): number {
+  if (state.result) {
+    const sign = state.result.winnerTeam === rootTeam ? 1 : -1;
+    return sign * (85_000 + state.result.levelDelta * 20_000);
+  }
+
+  const cache = createPlanningCache();
+  return evaluateBalancedState(state, rootTeam, cache);
+}
+
+function evaluateExactPressureState(state: GameState, rootSeat: Seat, cache: PlanningCache): number {
+  const rootTeam = state.players[rootSeat].team;
+  let score = evaluateBalancedState(state, rootTeam, cache);
+
+  if (state.result) {
+    return score;
+  }
+
+  for (const player of state.players) {
+    const factor = sameTeam(rootSeat, player.seat) ? 1 : -1;
+    const allPlays = generateAllPlays(player.hand);
+    const leadVolume = allPlays.length;
+    score += factor * Math.min(leadVolume, 36) * 4;
+
+    const finishNow = allPlays.some((play) => play.cards.length === player.hand.length);
+    if (finishNow) {
+      score += factor * 11_000;
+    }
+  }
+
+  if (state.tablePlay) {
+    const actor = state.currentPlayer;
+    const legalReplies = filterLegalPlays(generateAllPlays(state.players[actor].hand), state.tablePlay.play);
+    const canCollect = legalReplies.length > 0;
+    if (!sameTeam(rootSeat, actor)) {
+      score += canCollect ? -120 : 120;
+    } else {
+      score += canCollect ? 120 : -120;
+    }
+  }
+
+  return score;
+}
+
+function buildLegacySignalProfiles(state: GameState): Record<Seat, LegacySignalProfile> {
+  const profiles: Record<Seat, LegacySignalProfile> = {
+    0: { attackBias: 0, supportBias: 0, lane: null },
+    1: { attackBias: 0, supportBias: 0, lane: null },
+    2: { attackBias: 0, supportBias: 0, lane: null },
+    3: { attackBias: 0, supportBias: 0, lane: null },
+  };
+  const laneCounts: Record<Seat, Map<Play['type'], number>> = {
+    0: new Map(),
+    1: new Map(),
+    2: new Map(),
+    3: new Map(),
+  };
+
+  for (const entry of state.actionHistory) {
+    const actor = entry.seat;
+    if (entry.play) {
+      const laneCount = laneCounts[actor].get(entry.play.type) ?? 0;
+      laneCounts[actor].set(entry.play.type, laneCount + 1);
+      if (entry.play.cards.length >= 5 || isSpecialPlay(entry.play)) {
+        profiles[actor].attackBias += isSpecialPlay(entry.play) ? 2.2 : 1.1;
+      }
+      continue;
+    }
+
+    if (entry.tableOwnerAfter === null) {
+      continue;
+    }
+
+    if (sameTeam(actor, entry.tableOwnerAfter)) {
+      profiles[actor].supportBias += 1.5;
+    } else {
+      profiles[actor].supportBias += 0.45;
+    }
+  }
+
+  for (const seat of [0, 1, 2, 3] as const) {
+    let bestLane: Play['type'] | null = null;
+    let bestCount = 0;
+    for (const [lane, count] of laneCounts[seat]) {
+      if (count > bestCount) {
+        bestCount = count;
+        bestLane = lane;
+      }
+    }
+    profiles[seat].lane = bestLane;
+  }
+
+  return profiles;
+}
+
+function scoreLegacyV20SignalAdjustment(
+  state: GameState,
+  seat: Seat,
+  candidate: CandidateAction,
+  signals: Record<Seat, LegacySignalProfile>,
+): number {
+  const player = state.players[seat];
+  const teammateSeat = ((seat + 2) % 4) as Seat;
+  const teammate = state.players[teammateSeat];
+  const opponents = state.players.filter((other) => !sameTeam(seat, other.seat) && !other.finished);
+  const minOpponentCards = opponents.reduce((min, other) => Math.min(min, other.hand.length), 27);
+  const teamLikelyAttack = signals[teammateSeat].attackBias - signals[teammateSeat].supportBias >= 1.2;
+
+  if (candidate.type === 'pass') {
+    if (state.tablePlay && sameTeam(seat, state.tablePlay.owner)) {
+      return 95;
+    }
+
+    if (minOpponentCards <= 2) {
+      return -130;
+    }
+
+    return 0;
+  }
+
+  const play = candidate.play!;
+  let score = 0;
+
+  if (!state.tablePlay) {
+    if (play.type === signals[seat].lane) {
+      score += 16;
+    }
+
+    if (play.type === signals[teammateSeat].lane && teamLikelyAttack) {
+      score += 30;
+    }
+
+    if ((play.type === 'single' || play.type === 'pair') && play.primaryValue >= 14 && player.hand.length >= 8) {
+      score -= 72;
+    }
+
+    if (isSpecialPlay(play) && player.hand.length > 6 && minOpponentCards > 2) {
+      score -= 170;
+    }
+  } else {
+    const owner = state.players[state.tablePlay.owner];
+    const target = state.tablePlay.play;
+    const urgentOpponent = !sameTeam(seat, owner.seat) && owner.hand.length <= 3;
+
+    if (sameTeam(seat, owner.seat) && play.cards.length !== player.hand.length) {
+      score -= 170;
+    }
+
+    if (!isSpecialPlay(play) && play.type === target.type) {
+      const overtake = Math.max(0, play.primaryValue - target.primaryValue - 1);
+      score -= overtake * (play.type === 'single' ? 30 : 16);
+    }
+
+    if (!urgentOpponent && isSpecialPlay(play) && player.hand.length > 6 && !isSpecialPlay(target)) {
+      score -= 170 + (play.bombSize ?? 0) * 20;
+    }
+
+    if (urgentOpponent && isSpecialPlay(play)) {
+      score += 90;
+    }
+  }
+
+  if (teammate.hand.length <= 3 && play.cards.length <= 3 && !isSpecialPlay(play)) {
+    score += 38;
+  }
+
+  return score;
+}
+
+function scoreLegacyV21LeadAdjustment(state: GameState, seat: Seat, play: Play): number {
+  const player = state.players[seat];
+  let score = 0;
+  if ((play.type === 'single' || play.type === 'pair') && play.primaryValue >= 14 && player.hand.length >= 8) {
+    score -= 95 + (play.primaryValue - 14) * 24;
+  }
+
+  if (isSpecialPlay(play) && player.hand.length > 6) {
+    score -= 210 + (play.bombSize ?? 0) * 30;
+  }
+
+  if (play.type === 'straight' || play.type === 'pair-run' || play.type === 'triple-run' || play.type === 'full-house') {
+    score += 24;
+  }
+
+  if (play.cards.length >= Math.max(5, player.hand.length - 1)) {
+    score += 26;
+  }
+
+  return score;
+}
+
+function scoreLegacyV21ResponseAdjustment(state: GameState, seat: Seat, play: Play): number {
+  const player = state.players[seat];
+  const owner = state.players[state.tablePlay!.owner];
+  const target = state.tablePlay!.play;
+  let score = 0;
+
+  if (!isSpecialPlay(play) && play.type === target.type) {
+    const overtake = Math.max(0, play.primaryValue - target.primaryValue - 1);
+    score -= overtake * (play.type === 'single' ? 30 : play.type === 'pair' ? 18 : 12);
+  }
+
+  if (isSpecialPlay(play) && !isUrgentOpponentTurn(state, seat) && player.hand.length >= 7 && !isSpecialPlay(target)) {
+    score -= 220 + (play.bombSize ?? 0) * 32;
+  }
+
+  if (isSpecialPlay(play) && (owner.hand.length <= 2 || player.hand.length <= 5)) {
+    score += 95;
+  }
+
+  if (play.type === 'single' && play.primaryValue >= 15 && owner.hand.length >= 4 && player.hand.length >= 6) {
+    score -= 80;
+  }
+
+  return score;
 }
 
 function deterministicLegacyVRRoll(state: GameState, seat: Seat): number {
@@ -584,7 +1229,7 @@ function scoreLegacyResponsePlay(state: GameState, seat: Seat, play: Play, cache
   return score;
 }
 
-function scorePassAction(state: GameState, seat: Seat, cache: PlanningCache): number {
+export function scorePassAction(state: GameState, seat: Seat, cache: PlanningCache): number {
   const player = state.players[seat];
   const owner = state.players[state.tablePlay!.owner];
   const nextSeat = getNextActiveSeat(state.players, seat);
@@ -680,7 +1325,7 @@ function applyCandidateAction(state: GameState, seat: Seat, candidate: Candidate
   return applyPlay(state, seat, candidate.play!);
 }
 
-function createPlanningCache(): PlanningCache {
+export function createPlanningCache(): PlanningCache {
   return {
     handScore: new Map(),
     minTurns: new Map(),
@@ -688,7 +1333,7 @@ function createPlanningCache(): PlanningCache {
   };
 }
 
-function evaluateHandPlan(hand: Card[], cache: PlanningCache): number {
+export function evaluateHandPlan(hand: Card[], cache: PlanningCache): number {
   const key = handStateKey(hand);
   const cached = cache.handScore.get(key);
   if (cached !== undefined) {
@@ -768,7 +1413,7 @@ function estimateMinTurns(hand: Card[], depth: number, cache: PlanningCache): nu
   return bestTurns;
 }
 
-function buildGreedyPlanStats(hand: Card[], cache: PlanningCache): PlanStats {
+export function buildGreedyPlanStats(hand: Card[], cache: PlanningCache): PlanStats {
   const key = handStateKey(hand);
   const cached = cache.greedyStats.get(key);
   if (cached) {
@@ -874,7 +1519,7 @@ function scorePlanCandidate(play: Play, hand: Card[]): number {
   return score;
 }
 
-function removePlayFromHand(hand: Card[], play: Play): Card[] {
+export function removePlayFromHand(hand: Card[], play: Play): Card[] {
   const playedIds = new Set(play.cards.map((card) => card.id));
   return hand.filter((card) => !playedIds.has(card.id));
 }

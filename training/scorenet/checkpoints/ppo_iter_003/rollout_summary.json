@@ -1,0 +1,11 @@
+{
+  "matches": 120,
+  "baseSeed": 20263416,
+  "checkpoint": "training/scorenet/checkpoints/ppo_iter_002/ppo/epoch_004.pt",
+  "outputPath": "training/scorenet/checkpoints/ppo_iter_003/rollout.jsonl",
+  "sampleCount": 4579,
+  "averageTurnsPerMatch": 74.43333333333334,
+  "team0Wins": 36,
+  "team1Wins": 84,
+  "temperature": 0.9
+}

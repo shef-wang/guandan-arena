@@ -1,0 +1,80 @@
+{
+  "system": {
+    "platform": "macOS-14.5-arm64-arm-64bit",
+    "machine": "arm64",
+    "processor": "Apple M2 Pro",
+    "cpu_count": 12,
+    "total_memory_gb": 16.0,
+    "device": "mps",
+    "mps_built": true,
+    "mps_available": true
+  },
+  "runtime": {
+    "cpu_fraction": 0.8,
+    "torch_num_threads": 9,
+    "torch_num_interop_threads": 6,
+    "mps_memory_fraction": 0.8
+  },
+  "history": [
+    {
+      "epoch": 1,
+      "loss": 0.667612,
+      "policy_loss": 0.005326,
+      "value_loss": 1.330224,
+      "entropy": 0.282573,
+      "mean_ratio": 0.999762,
+      "clip_fraction": 0.097838,
+      "approx_kl": 0.007876,
+      "epoch_seconds": 5.801,
+      "samples_per_second": 789.38,
+      "mps_current_allocated_mb": 9.45,
+      "mps_driver_allocated_mb": 1285.2,
+      "mps_recommended_max_mb": 10922.67
+    },
+    {
+      "epoch": 2,
+      "loss": 0.547296,
+      "policy_loss": -0.001807,
+      "value_loss": 1.103807,
+      "entropy": 0.280116,
+      "mean_ratio": 0.996542,
+      "clip_fraction": 0.109849,
+      "approx_kl": 0.013224,
+      "epoch_seconds": 3.806,
+      "samples_per_second": 1203.04,
+      "mps_current_allocated_mb": 9.39,
+      "mps_driver_allocated_mb": 1313.17,
+      "mps_recommended_max_mb": 10922.67
+    },
+    {
+      "epoch": 3,
+      "loss": 0.469648,
+      "policy_loss": -0.004688,
+      "value_loss": 0.954248,
+      "entropy": 0.278782,
+      "mean_ratio": 0.999227,
+      "clip_fraction": 0.109194,
+      "approx_kl": 0.010921,
+      "epoch_seconds": 2.965,
+      "samples_per_second": 1544.34,
+      "mps_current_allocated_mb": 7.89,
+      "mps_driver_allocated_mb": 1314.39,
+      "mps_recommended_max_mb": 10922.67
+    },
+    {
+      "epoch": 4,
+      "loss": 0.389336,
+      "policy_loss": -0.007357,
+      "value_loss": 0.799045,
+      "entropy": 0.282974,
+      "mean_ratio": 0.99665,
+      "clip_fraction": 0.113999,
+      "approx_kl": 0.01446,
+      "epoch_seconds": 3.061,
+      "samples_per_second": 1495.89,
+      "mps_current_allocated_mb": 7.45,
+      "mps_driver_allocated_mb": 1303.55,
+      "mps_recommended_max_mb": 10922.67
+    }
+  ]
+}
