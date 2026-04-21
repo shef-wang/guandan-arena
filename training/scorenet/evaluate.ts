@@ -7,6 +7,7 @@ declare const process: {
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { createFunctionAgent, createHeuristicAgent, GuandanArenaMatch } from '../../src/arena/engine';
+import type { AiProfile } from '../../src/game/ai';
 import { createSeededRandom } from '../../src/game/cards';
 import { createNewGame } from '../../src/game/state';
 import type { ArenaChosenAction, GuandanArenaAgent } from '../../src/arena/types';
@@ -23,8 +24,26 @@ class PythonPolicyClient {
   private nextId = 1;
   private readonly ready: Promise<void>;
 
-  constructor(pythonBin: string, checkpoint: string) {
-    this.child = spawn(pythonBin, ['training/scorenet/serve_policy.py', '--checkpoint', checkpoint], {
+  constructor(
+    pythonBin: string,
+    checkpoint: string,
+    cpuFraction: number,
+    mpsMemoryFraction: number,
+    device: string | null,
+  ) {
+    const args = [
+      'training/scorenet/serve_policy.py',
+      '--checkpoint',
+      checkpoint,
+      '--cpu-fraction',
+      String(cpuFraction),
+      '--mps-memory-fraction',
+      String(mpsMemoryFraction),
+    ];
+    if (device) {
+      args.push('--device', device);
+    }
+    this.child = spawn(pythonBin, args, {
       cwd: process.cwd(),
       stdio: ['pipe', 'pipe', 'pipe'],
     });
@@ -102,12 +121,16 @@ async function main(): Promise<void> {
   const baseSeed = Number(process.env.BASE_SEED ?? '20260416');
   const checkpoint = process.env.CHECKPOINT;
   const pythonBin = process.env.PYTHON_BIN ?? '.venv-danzero/bin/python';
+  const opponentProfile = (process.env.OPPONENT_PROFILE ?? 'legacy-v2.7') as AiProfile;
+  const cpuFraction = Number(process.env.CPU_FRACTION ?? '1.0');
+  const mpsMemoryFraction = Number(process.env.MPS_MEMORY_FRACTION ?? '0.95');
+  const scoreNetDevice = process.env.SCORENET_DEVICE ?? null;
 
   if (!checkpoint) {
     throw new Error('CHECKPOINT is required.');
   }
 
-  const client = new PythonPolicyClient(pythonBin, checkpoint);
+  const client = new PythonPolicyClient(pythonBin, checkpoint, cpuFraction, mpsMemoryFraction, scoreNetDevice);
   let learnedWins = 0;
   let legacyWins = 0;
   let learnedLevelGain = 0;
@@ -124,14 +147,14 @@ async function main(): Promise<void> {
           learnedTeam === 0
             ? [
                 learnedAgent,
-                createHeuristicAgent({ profile: 'legacy-v1', label: 'Legacy 1' }),
+                createHeuristicAgent({ profile: opponentProfile, label: 'Opponent 1' }),
                 learnedAgent,
-                createHeuristicAgent({ profile: 'legacy-v1', label: 'Legacy 3' }),
+                createHeuristicAgent({ profile: opponentProfile, label: 'Opponent 3' }),
               ]
             : [
-                createHeuristicAgent({ profile: 'legacy-v1', label: 'Legacy 0' }),
+                createHeuristicAgent({ profile: opponentProfile, label: 'Opponent 0' }),
                 learnedAgent,
-                createHeuristicAgent({ profile: 'legacy-v1', label: 'Legacy 2' }),
+                createHeuristicAgent({ profile: opponentProfile, label: 'Opponent 2' }),
                 learnedAgent,
               ],
       });
@@ -159,6 +182,7 @@ async function main(): Promise<void> {
         matches,
         baseSeed,
         checkpoint,
+        opponentProfile,
         learnedLevelGainTotal: learnedLevelGain,
         legacyLevelGainTotal: legacyLevelGain,
         netLevelDeltaFromLearnedPerspective: learnedLevelGain - legacyLevelGain,

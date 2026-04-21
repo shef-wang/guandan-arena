@@ -10,7 +10,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { applyArenaChosenAction, buildArenaTurnInput } from '../../src/arena/engine';
 import { createSeededRandom } from '../../src/game/cards';
-import { chooseLegacyV1AiAction } from '../../src/game/ai';
+import { chooseAiAction, type AiProfile } from '../../src/game/ai';
 import { createNewGame } from '../../src/game/state';
 import type { AiDecision, GameState, Seat } from '../../src/game/types';
 import type { ArenaChosenAction } from '../../src/arena/types';
@@ -155,6 +155,10 @@ async function main(): Promise<void> {
   const mpsMemoryFraction = Number(process.env.MPS_MEMORY_FRACTION ?? '0.8');
   const gaeLambda = Number(process.env.GAE_LAMBDA ?? '0.95');
   const gamma = Number(process.env.GAMMA ?? '1.0');
+  const opponentProfile = (process.env.OPPONENT_PROFILE ?? 'legacy-v2.7') as AiProfile;
+  const workerId = process.env.ROLLOUT_WORKER_ID ?? 'main';
+  const progressEveryRaw = Number(process.env.PROGRESS_EVERY_MATCHES ?? '10');
+  const progressEveryMatches = Number.isFinite(progressEveryRaw) ? Math.max(0, Math.floor(progressEveryRaw)) : 10;
 
   if (!checkpoint) {
     throw new Error('CHECKPOINT is required.');
@@ -166,6 +170,7 @@ async function main(): Promise<void> {
   let totalTurns = 0;
   let team0Wins = 0;
   let team1Wins = 0;
+  const startedAt = Date.now();
 
   try {
     for (let matchIndex = 0; matchIndex < matches; matchIndex += 1) {
@@ -201,7 +206,7 @@ async function main(): Promise<void> {
             chosenAction.kind === 'pass' ? { kind: 'pass' } : { kind: 'play', actionId: chosenAction.actionId };
           state = applyArenaChosenAction(state, seat, arenaAction);
         } else {
-          const decision = chooseLegacyV1AiAction(state, seat);
+          const decision = chooseAiAction(state, seat, opponentProfile);
           state = applyArenaChosenAction(state, seat, toArenaChosenAction(decision));
         }
         turnCount += 1;
@@ -213,6 +218,16 @@ async function main(): Promise<void> {
       else team1Wins += 1;
       const terminalReturn = state.result.winnerTeam === 0 ? state.result.levelDelta : -state.result.levelDelta;
       computeGAEAndAppend(pending, terminalReturn, gamma, gaeLambda, lines);
+
+      const completed = matchIndex + 1;
+      if (progressEveryMatches > 0 && (completed % progressEveryMatches === 0 || completed === matches)) {
+        const elapsedSec = (Date.now() - startedAt) / 1000;
+        const rate = completed > 0 ? elapsedSec / completed : 0;
+        const etaSec = Math.max(0, (matches - completed) * rate);
+        console.error(
+          `[rollout w${workerId}] ${completed}/${matches} matches, samples=${lines.length}, avgTurns=${(totalTurns / completed).toFixed(2)}, elapsed=${elapsedSec.toFixed(1)}s, eta=${etaSec.toFixed(1)}s`,
+        );
+      }
     }
   } finally {
     await client.close();
@@ -231,6 +246,7 @@ async function main(): Promise<void> {
         team0Wins,
         team1Wins,
         temperature,
+        opponentProfile,
       },
       null,
       2,

@@ -4,15 +4,55 @@ import math
 import os
 import platform
 import subprocess
+import sys
 
 import torch
 
 
+def _mps_unavailable_reason() -> str:
+    if not torch.backends.mps.is_built():
+        return "PyTorch was not built with MPS support (install a torch build with MPS)."
+    if not torch.backends.mps.is_available():
+        return (
+            "MPS is built but runtime reports unavailable. "
+            "On macOS this usually means the process has no Metal/GPU access "
+            "(e.g. sandboxed shell, remote ssh without GUI session, or incompatible OS/torch)."
+        )
+    return ""
+
+
 def pick_device(preferred: str | None = None) -> torch.device:
-    if preferred:
-        return torch.device(preferred)
+    """Resolve the torch device to use for ScoreNet training/inference.
+
+    Behavior:
+    - If `preferred` is explicitly set (or SCORENET_DEVICE env var), honor it.
+      Asking for "mps" when MPS is unavailable raises RuntimeError so training
+      never silently falls back to CPU.
+    - If no preference is given, prefer MPS when available; otherwise CPU
+      with a loud stderr warning that includes the reason.
+    """
+    requested = preferred or os.environ.get("SCORENET_DEVICE") or None
+
+    if requested:
+        requested_lower = requested.lower()
+        if requested_lower == "mps" and not torch.backends.mps.is_available():
+            raise RuntimeError(
+                f"Requested device 'mps' is not available: {_mps_unavailable_reason()} "
+                "Run outside the Cursor sandbox (or run training in a normal Terminal on macOS), "
+                "or pass --device cpu to proceed without GPU."
+            )
+        return torch.device(requested_lower)
+
     if torch.backends.mps.is_available():
         return torch.device("mps")
+
+    print(
+        "[runtime_utils] WARNING: MPS unavailable, falling back to CPU. "
+        f"Reason: {_mps_unavailable_reason()} "
+        "Set --device mps (or SCORENET_DEVICE=mps) to make this an error instead.",
+        file=sys.stderr,
+        flush=True,
+    )
     return torch.device("cpu")
 
 

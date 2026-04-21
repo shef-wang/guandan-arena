@@ -76,21 +76,18 @@ These files matter most.
 ### Core Game Logic
 
 - [src/game/rules.ts](/Users/sheffieldwang/Documents/codexexp/guandan/src/game/rules.ts)
-  Legal move generation, move filtering, play comparison.
-
+Legal move generation, move filtering, play comparison.
 - [src/game/state.ts](/Users/sheffieldwang/Documents/codexexp/guandan/src/game/state.ts)
-  Game transitions, pass/play application, terminal result resolution.
-
+Game transitions, pass/play application, terminal result resolution.
 - [src/game/types.ts](/Users/sheffieldwang/Documents/codexexp/guandan/src/game/types.ts)
-  Shared game types.
-
+Shared game types.
 - [src/game/cards.ts](/Users/sheffieldwang/Documents/codexexp/guandan/src/game/cards.ts)
-  Deck creation, shuffle, seeded randomness.
+Deck creation, shuffle, seeded randomness.
 
 ### Heuristic Policies
 
 - [src/game/ai.ts](/Users/sheffieldwang/Documents/codexexp/guandan/src/game/ai.ts)
-  Current built-in policies:
+Current built-in policies:
   - `baseline`
   - `legacy-v1`
   - `legacy-vR`
@@ -106,22 +103,17 @@ Important exported functions:
 ### Arena / Prompt / Benchmarking
 
 - [src/arena/engine.ts](/Users/sheffieldwang/Documents/codexexp/guandan/src/arena/engine.ts)
-  Arena match runner, legal action packaging, agent abstraction.
-
+Arena match runner, legal action packaging, agent abstraction.
 - [src/arena/types.ts](/Users/sheffieldwang/Documents/codexexp/guandan/src/arena/types.ts)
-  Arena-facing observation and action types.
-
+Arena-facing observation and action types.
 - [src/arena/prompt.ts](/Users/sheffieldwang/Documents/codexexp/guandan/src/arena/prompt.ts)
-  Current LLM prompt formatting for arena decisions.
-
+Current LLM prompt formatting for arena decisions.
 - [src/arena/openrouter.ts](/Users/sheffieldwang/Documents/codexexp/guandan/src/arena/openrouter.ts)
-  Current `openrouter` and `llmreranker` logic.
-
+Current `openrouter` and `llmreranker` logic.
 - [src/arena/deviationMetric.ts](/Users/sheffieldwang/Documents/codexexp/guandan/src/arena/deviationMetric.ts)
-  Formal metric for how often a reranker deviates from `legacy-v1`.
-
+Formal metric for how often a reranker deviates from `legacy-v1`.
 - [src/arena/runHeadlessMatch.ts](/Users/sheffieldwang/Documents/codexexp/guandan/src/arena/runHeadlessMatch.ts)
-  Headless benchmark runner, now already emits `deviation_metric` for `llmreranker`.
+Headless benchmark runner, now already emits `deviation_metric` for `llmreranker`.
 
 ### Existing Training Stack
 
