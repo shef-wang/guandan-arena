@@ -12,7 +12,7 @@ type PracticeAiMode = 'legacy' | 'openrouter';
 
 const DEEPSEEK_V3_MODEL = 'deepseek/deepseek-chat-v3-0324';
 const PRACTICE_OPENROUTER_KEY_STORAGE = 'guandan-practice-openrouter-key';
-const PRACTICE_LEGACY_PROFILE = 'legacy-v2.6' as const;
+const PRACTICE_LEGACY_PROFILE = 'legacy-v3.0' as const;
 
 export default function PracticeTable() {
   const [game, setGame] = useState<GameState>(() => createNewGame());
@@ -95,7 +95,7 @@ export default function PracticeTable() {
   }, [openRouterApiKey]);
 
   const hasOpenRouterKey = openRouterApiKey.trim().length > 0;
-  const aiModeLabel = aiMode === 'openrouter' ? 'OpenRouter / DeepSeek v3' : '内置 legacy-v2.6';
+  const aiModeLabel = aiMode === 'openrouter' ? 'OpenRouter / DeepSeek v3' : '内置 legacy-v3.0';
 
   const openRouterSeatAgent = useMemo(() => {
     if (!hasOpenRouterKey) {

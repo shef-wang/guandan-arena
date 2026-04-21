@@ -2,7 +2,13 @@ import { filterLegalPlays, generateAllPlays, isSpecialPlay, sameTeam, usesRankPo
 import { applyPass, applyPlay, getNextActiveSeat } from './state';
 import type { AiDecision, Card, GameState, Play, Seat, Team } from './types';
 
-export type AiProfile = 'baseline' | 'legacy-v1' | `legacy-v2.${number}` | 'legacy-vR' | 'balanced-v2';
+export type AiProfile =
+  | 'baseline'
+  | 'legacy-v1'
+  | `legacy-v2.${number}`
+  | `legacy-v3.${number}`
+  | 'legacy-vR'
+  | 'balanced-v2';
 
 interface ScoredPlay {
   play: Play;
@@ -89,6 +95,14 @@ export function chooseAiAction(state: GameState, seat: Seat, profile: AiProfile 
       return chooseLegacyV29AiAction(state, seat);
     }
 
+    return chooseLegacyV1AiAction(state, seat);
+  }
+
+  if (profile.startsWith('legacy-v3.')) {
+    const suffix = profile.slice('legacy-v3.'.length);
+    if (suffix === '0') {
+      return chooseLegacyV30AiAction(state, seat);
+    }
     return chooseLegacyV1AiAction(state, seat);
   }
 
@@ -579,6 +593,87 @@ export function chooseLegacyV29AiAction(state: GameState, seat: Seat): AiDecisio
   }
 
   return chooseLegacyV27AiAction(state, seat);
+}
+
+const V30_ROOT_TOP_K = 5;
+const V30_PRIOR_WEIGHT = 0.3;
+const V30_V21_ADJUSTMENT_WEIGHT = 0.35;
+const V30_ROLLOUT_MAX_STEPS = 220;
+
+type V30RolloutPolicy = (state: GameState, seat: Seat, rootSeat: Seat) => AiDecision;
+
+const V30_ROLLOUT_POLICIES: readonly V30RolloutPolicy[] = [
+  (state, seat) => chooseLegacyV1AiAction(state, seat),
+  (state, seat) => chooseLegacyV21AiAction(state, seat),
+  (state, seat, rootSeat) =>
+    sameTeam(rootSeat, seat) ? chooseLegacyV21AiAction(state, seat) : chooseLegacyV1AiAction(state, seat),
+];
+
+export function chooseLegacyV30AiAction(state: GameState, seat: Seat): AiDecision {
+  const player = state.players[seat];
+  const legalPlays = filterLegalPlays(generateAllPlays(player.hand), state.tablePlay?.play ?? null);
+  if (legalPlays.length === 0) {
+    return { type: 'pass' };
+  }
+
+  const finishNow = legalPlays.find((play) => play.cards.length === player.hand.length);
+  if (finishNow) {
+    return { type: 'play', play: finishNow };
+  }
+
+  const ranked = rankLegacyV1ActionCandidates(state, seat).slice(0, V30_ROOT_TOP_K);
+  if (ranked.length === 0) {
+    return { type: 'pass' };
+  }
+  if (ranked.length === 1) {
+    return toAiDecision(ranked[0]);
+  }
+
+  const team = player.team;
+  let best = ranked[0];
+  let bestScore = Number.NEGATIVE_INFINITY;
+  for (const candidate of ranked) {
+    const action = toCandidateAction(candidate);
+    const nextState = applyCandidateAction(state, seat, action);
+
+    let terminalSum = 0;
+    for (const policy of V30_ROLLOUT_POLICIES) {
+      const terminalState = simulateV30PolicyToTerminal(nextState, seat, policy, V30_ROLLOUT_MAX_STEPS);
+      terminalSum += scoreTerminalTeamOutcome(terminalState, team);
+    }
+    const avgTerminal = terminalSum / V30_ROLLOUT_POLICIES.length;
+
+    let score = candidate.score * V30_PRIOR_WEIGHT;
+    score += scoreLegacyV21ActionAdjustment(state, seat, action) * V30_V21_ADJUSTMENT_WEIGHT;
+    score += avgTerminal;
+
+    if (score > bestScore) {
+      best = candidate;
+      bestScore = score;
+    }
+  }
+
+  return toAiDecision(best);
+}
+
+function simulateV30PolicyToTerminal(
+  state: GameState,
+  rootSeat: Seat,
+  policy: V30RolloutPolicy,
+  maxSteps: number,
+): GameState {
+  let current = state;
+  for (let step = 0; step < maxSteps; step += 1) {
+    if (current.result) {
+      return current;
+    }
+
+    const actor = current.currentPlayer;
+    const decision = policy(current, actor, rootSeat);
+    current = applyAiDecision(current, actor, decision);
+  }
+
+  return current;
 }
 
 function toAiDecision(candidate: RankedAiActionCandidate): AiDecision {

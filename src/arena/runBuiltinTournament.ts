@@ -111,5 +111,9 @@ function parseProfile(raw: string | undefined, fallback: AiProfile): AiProfile {
     return raw as AiProfile;
   }
 
+  if (raw && /^legacy-v3\.\d+$/.test(raw)) {
+    return raw as AiProfile;
+  }
+
   return fallback;
 }
