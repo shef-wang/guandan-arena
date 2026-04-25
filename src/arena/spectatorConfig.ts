@@ -6,6 +6,7 @@ export const LOCAL_STORAGE_KEY = 'guandan-openrouter-spectator-v1';
 export type SeatAgentMode =
   | 'builtin-baseline'
   | 'builtin-legacy-v1'
+  | 'builtin-legacy-v3'
   | 'builtin-legacy-vR'
   | 'builtin-balanced-v2'
   | 'openrouter'
@@ -40,12 +41,20 @@ export const AVAILABLE_OPENROUTER_MODELS: OpenRouterModelOption[] = [
     label: 'Kimi K2.5',
   },
   {
+    value: 'moonshotai/kimi-k2.6',
+    label: 'Kimi K2.6',
+  },
+  {
     value: 'google/gemma-4-26b-a4b-it',
     label: 'Gemma 4 26B A4B Instruct',
   },
   {
     value: 'deepseek/deepseek-chat-v3-0324',
     label: 'DeepSeek Chat V3 0324',
+  },
+  {
+    value: 'tencent/hy3-preview:free',
+    label: 'Tencent HY3 Preview (free)',
   },
 ];
 
@@ -162,6 +171,10 @@ export function getSeatDisplayLabel(config: SpectatorSeatConfig): string {
     return config.label || 'guandan-ai vR';
   }
 
+  if (config.mode === 'builtin-legacy-v3') {
+    return config.label || 'guandan-ai v3.0';
+  }
+
   if (config.mode === 'builtin-legacy-v1') {
     return config.label || 'guandan-ai v1';
   }
@@ -184,6 +197,10 @@ export function getSeatSubtitle(config: SpectatorSeatConfig): string {
 
   if (config.mode === 'builtin-legacy-vR') {
     return `${getSeatDisplayLabel(config)} · weighted top-5`;
+  }
+
+  if (config.mode === 'builtin-legacy-v3') {
+    return `${getSeatDisplayLabel(config)} · policy ensemble`;
   }
 
   if (config.mode === 'builtin-legacy-v1') {

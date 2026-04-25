@@ -54,20 +54,26 @@ class PythonPolicyClient {
   private nextId = 1;
   private readonly ready: Promise<void>;
 
-  constructor(pythonBin: string, checkpoint: string, cpuFraction: number, mpsMemoryFraction: number) {
-    this.child = spawn(
-      pythonBin,
-      [
-        'training/scorenet/serve_policy.py',
-        '--checkpoint',
-        checkpoint,
-        '--cpu-fraction',
-        String(cpuFraction),
-        '--mps-memory-fraction',
-        String(mpsMemoryFraction),
-      ],
-      { cwd: process.cwd(), stdio: ['pipe', 'pipe', 'pipe'] },
-    );
+  constructor(
+    pythonBin: string,
+    checkpoint: string,
+    cpuFraction: number,
+    mpsMemoryFraction: number,
+    device: string | null,
+  ) {
+    const args = [
+      'training/scorenet/serve_policy.py',
+      '--checkpoint',
+      checkpoint,
+      '--cpu-fraction',
+      String(cpuFraction),
+      '--mps-memory-fraction',
+      String(mpsMemoryFraction),
+    ];
+    if (device) {
+      args.push('--device', device);
+    }
+    this.child = spawn(pythonBin, args, { cwd: process.cwd(), stdio: ['pipe', 'pipe', 'pipe'] });
 
     const stdout = createInterface({ input: this.child.stdout });
     const stderr = createInterface({ input: this.child.stderr });
@@ -153,9 +159,10 @@ async function main(): Promise<void> {
   const temperature = Number(process.env.TEMPERATURE ?? '0.9');
   const cpuFraction = Number(process.env.CPU_FRACTION ?? '0.8');
   const mpsMemoryFraction = Number(process.env.MPS_MEMORY_FRACTION ?? '0.8');
+  const scoreNetDevice = process.env.SCORENET_DEVICE ?? null;
   const gaeLambda = Number(process.env.GAE_LAMBDA ?? '0.95');
   const gamma = Number(process.env.GAMMA ?? '1.0');
-  const opponentProfile = (process.env.OPPONENT_PROFILE ?? 'legacy-v2.7') as AiProfile;
+  const opponentProfile = (process.env.OPPONENT_PROFILE ?? 'legacy-v3.0') as AiProfile;
   const workerId = process.env.ROLLOUT_WORKER_ID ?? 'main';
   const progressEveryRaw = Number(process.env.PROGRESS_EVERY_MATCHES ?? '10');
   const progressEveryMatches = Number.isFinite(progressEveryRaw) ? Math.max(0, Math.floor(progressEveryRaw)) : 10;
@@ -165,7 +172,7 @@ async function main(): Promise<void> {
   }
 
   mkdirSync(dirname(outputPath), { recursive: true });
-  const client = new PythonPolicyClient(pythonBin, checkpoint, cpuFraction, mpsMemoryFraction);
+  const client = new PythonPolicyClient(pythonBin, checkpoint, cpuFraction, mpsMemoryFraction, scoreNetDevice);
   const lines: string[] = [];
   let totalTurns = 0;
   let team0Wins = 0;

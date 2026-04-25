@@ -4,6 +4,8 @@ apikey/
 .env
 .env.local
 .env.*.local
+/key
+/key.rtf
 .DS_Store
 
 .codex-builtin-cjs/
@@ -30,3 +32,5 @@ training/scorenet/rollouts/
 
 tools/*.cjs
 tools/*.mjs
+.vercel
+.env*.local

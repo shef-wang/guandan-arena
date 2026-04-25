@@ -76,6 +76,9 @@ interface OpenRouterResponse {
 export const OPENROUTER_DEFAULT_BASE_URL = 'https://openrouter.ai/api/v1/chat/completions';
 export const OPENROUTER_DEFAULT_RERANKER_MODEL = 'deepseek/deepseek-chat-v3-0324';
 const DEFAULT_MAX_TOKENS = 96;
+const KIMI_K26_MODEL = 'moonshotai/kimi-k2.6';
+const KIMI_K26_MAX_TOKENS = 512;
+const KIMI_K26_TIMEOUT_MS = 90_000;
 const DEFAULT_RERANKER_TOP_K = 6;
 
 interface RerankerCandidate {
@@ -323,46 +326,75 @@ function buildHeaders(config: OpenRouterAgentConfig): HeadersInit {
 }
 
 async function requestOpenRouterText(config: OpenRouterAgentConfig, systemPrompt: string, prompt: string): Promise<string> {
-  const controller = new AbortController();
-  const timeoutId = globalThis.setTimeout(() => controller.abort(), config.timeoutMs ?? 45_000);
+  let lastError: unknown = null;
 
-  try {
-    const response = await fetch(config.baseUrl ?? OPENROUTER_DEFAULT_BASE_URL, {
-      method: 'POST',
-      headers: buildHeaders(config),
-      body: JSON.stringify({
-        model: config.model,
-        temperature: config.temperature ?? 0.1,
-        max_tokens: config.maxTokens ?? DEFAULT_MAX_TOKENS,
-        messages: [
-          {
-            role: 'system',
-            content: systemPrompt,
+  for (let attempt = 1; attempt <= getRequestAttempts(config.model); attempt += 1) {
+    const controller = new AbortController();
+    const timeoutId = globalThis.setTimeout(() => controller.abort(), config.timeoutMs ?? getDefaultTimeoutMs(config.model));
+
+    try {
+      const response = await fetch(config.baseUrl ?? OPENROUTER_DEFAULT_BASE_URL, {
+        method: 'POST',
+        headers: buildHeaders(config),
+        body: JSON.stringify({
+          model: config.model,
+          temperature: config.temperature ?? 0.1,
+          max_tokens: config.maxTokens ?? getDefaultMaxTokens(config.model),
+          ...(usesJsonResponseFormat(config.model) ? { response_format: { type: 'json_object' } } : {}),
+          reasoning: {
+            effort: 'none',
+            exclude: true,
           },
-          {
-            role: 'user',
-            content: prompt,
-          },
-        ],
-      }),
-      signal: controller.signal,
-    });
+          messages: [
+            {
+              role: 'system',
+              content: systemPrompt,
+            },
+            {
+              role: 'user',
+              content: prompt,
+            },
+          ],
+        }),
+        signal: controller.signal,
+      });
 
-    const data = (await response.json()) as OpenRouterResponse;
+      const data = (await response.json()) as OpenRouterResponse;
 
-    if (!response.ok) {
-      throw new Error(data.error?.message ?? `OpenRouter request failed with status ${response.status}`);
+      if (!response.ok) {
+        throw new Error(data.error?.message ?? `OpenRouter request failed with status ${response.status}`);
+      }
+
+      const text = extractOpenRouterText(data);
+      if (!text) {
+        throw new Error('OpenRouter returned no text content for this turn.');
+      }
+
+      return text;
+    } catch (error) {
+      lastError = error;
+    } finally {
+      globalThis.clearTimeout(timeoutId);
     }
-
-    const text = extractOpenRouterText(data);
-    if (!text) {
-      throw new Error('OpenRouter returned no text content for this turn.');
-    }
-
-    return text;
-  } finally {
-    globalThis.clearTimeout(timeoutId);
   }
+
+  throw lastError instanceof Error ? lastError : new Error('OpenRouter request failed.');
+}
+
+function usesJsonResponseFormat(model: string): boolean {
+  return model.trim() === KIMI_K26_MODEL;
+}
+
+function getDefaultMaxTokens(model: string): number {
+  return model.trim() === KIMI_K26_MODEL ? KIMI_K26_MAX_TOKENS : DEFAULT_MAX_TOKENS;
+}
+
+function getDefaultTimeoutMs(model: string): number {
+  return model.trim() === KIMI_K26_MODEL ? KIMI_K26_TIMEOUT_MS : 45_000;
+}
+
+function getRequestAttempts(model: string): number {
+  return model.trim() === KIMI_K26_MODEL ? 3 : 1;
 }
 
 function extractOpenRouterText(data: OpenRouterResponse): string {

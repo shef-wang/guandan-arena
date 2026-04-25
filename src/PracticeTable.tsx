@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { chooseAiAction } from './game/ai';
 import { enumerateExactPlays, filterLegalPlays, getPlayDisplayRank, sortPlayOptionsForContext } from './game/rules';
 import { applyPass, applyPlay, createNewGame, getSeatStatus } from './game/state';
@@ -7,14 +7,47 @@ import GameTableScene from './table/GameTableScene';
 import { PlayingCard, formatPlacementKey } from './ui/tableWidgets';
 import { applyArenaChosenAction, buildArenaTurnInput } from './arena/engine';
 import { createOpenRouterAgent } from './arena/openrouter';
+import type { ArenaChosenAction } from './arena/types';
+import { buildHeuristicContext, encodeTurnForPolicy } from '../training/scorenet/feature_codec';
 
-type PracticeAiMode = 'legacy' | 'openrouter';
+type PracticeAiMode = 'legacy' | 'openrouter' | 'ppo';
 
-const DEEPSEEK_V3_MODEL = 'deepseek/deepseek-chat-v3-0324';
+interface ScoreNetStatus {
+  available: boolean;
+  checkpoint: string | null;
+  error?: string;
+}
+
+interface ScoreNetChoiceResponse {
+  chosen_index?: number;
+  checkpoint?: string;
+  error?: string;
+}
+
+interface OpenRouterLocalKeyResponse {
+  available: boolean;
+  key: string | null;
+  source: string | null;
+}
+
+interface LegacyAiWorkerRequest {
+  id: number;
+  state: GameState;
+  seat: 1 | 2 | 3;
+  profile: typeof PRACTICE_LEGACY_PROFILE;
+}
+
+interface LegacyAiWorkerResponse {
+  id: number;
+  decision: ReturnType<typeof chooseAiAction>;
+}
+
+const HY3_MODEL = 'tencent/hy3-preview:free';
 const PRACTICE_OPENROUTER_KEY_STORAGE = 'guandan-practice-openrouter-key';
 const PRACTICE_LEGACY_PROFILE = 'legacy-v3.0' as const;
 
 export default function PracticeTable() {
+  const [gameStarted, setGameStarted] = useState(false);
   const [game, setGame] = useState<GameState>(() => createNewGame());
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [selectedOptionIndex, setSelectedOptionIndex] = useState(0);
@@ -22,12 +55,32 @@ export default function PracticeTable() {
   const [aiMode, setAiMode] = useState<PracticeAiMode>('legacy');
   const [openRouterApiKey, setOpenRouterApiKey] = useState('');
   const [llmStatus, setLlmStatus] = useState('未启用');
+  const [localKeySource, setLocalKeySource] = useState<string | null>(null);
+  const [scoreNetStatus, setScoreNetStatus] = useState<ScoreNetStatus>({
+    available: false,
+    checkpoint: null,
+  });
+  const [scoreNetStatusText, setScoreNetStatusText] = useState('Checking latest PPO checkpoint...');
+  const legacyWorkerRef = useRef<Worker | null>(null);
+  const legacyWorkerPendingRef = useRef(
+    new Map<number, { resolve: (decision: ReturnType<typeof chooseAiAction>) => void; reject: (error: Error) => void }>(),
+  );
+  const legacyWorkerRequestIdRef = useRef(1);
 
   const human = game.players[0];
+  const normalizedOrganizedGroups = useMemo(() => normalizeOrganizedGroups(organizedGroups, human.hand), [organizedGroups, human.hand]);
   const humanGroups = buildDisplayGroups(human.hand, organizedGroups);
   const straightFlushHints = getStraightFlushHints(human.hand);
   const currentTarget = game.tablePlay?.play ?? null;
   const selectedCards = human.hand.filter((card) => selectedIds.includes(card.id));
+  const selectedCardIdSet = useMemo(() => new Set(selectedIds), [selectedIds]);
+  const selectedOrganizedGroup = useMemo(
+    () =>
+      normalizedOrganizedGroups.find(
+        (group) => group.length === selectedIds.length && group.every((id) => selectedCardIdSet.has(id)),
+      ) ?? null,
+    [normalizedOrganizedGroups, selectedCardIdSet, selectedIds.length],
+  );
   const selectedPlayOptions = sortPlayOptionsForContext(
     filterLegalPlays(enumerateExactPlays(selectedCards), currentTarget),
     currentTarget,
@@ -80,6 +133,8 @@ export default function PracticeTable() {
     if (saved) {
       setOpenRouterApiKey(saved);
     }
+
+    void loadLocalOpenRouterKey(saved ?? '');
   }, []);
 
   useEffect(() => {
@@ -94,8 +149,13 @@ export default function PracticeTable() {
     }
   }, [openRouterApiKey]);
 
+  useEffect(() => {
+    void refreshScoreNetStatus();
+  }, []);
+
   const hasOpenRouterKey = openRouterApiKey.trim().length > 0;
-  const aiModeLabel = aiMode === 'openrouter' ? 'OpenRouter / DeepSeek v3' : '内置 legacy-v3.0';
+  const aiModeLabel =
+    aiMode === 'openrouter' ? 'OpenRouter / HY3' : aiMode === 'ppo' ? 'Latest PPO ScoreNet' : '内置 legacy-v3.0';
 
   const openRouterSeatAgent = useMemo(() => {
     if (!hasOpenRouterKey) {
@@ -104,13 +164,16 @@ export default function PracticeTable() {
 
     return createOpenRouterAgent({
       id: 'practice-openrouter-agent',
-      label: 'Practice OpenRouter',
+      label: 'Practice HY3',
       apiKey: openRouterApiKey.trim(),
-      model: DEEPSEEK_V3_MODEL,
+      model: HY3_MODEL,
       siteName: 'Guandan Practice',
       siteUrl: typeof window !== 'undefined' ? window.location.origin : undefined,
       onStatus(event) {
-        setLlmStatus(`${event.code}: ${event.message}`);
+        setLlmStatus((current) => {
+          const next = formatOpenRouterStatus(event.code);
+          return current === next ? current : next;
+        });
       },
       timeoutMs: 20000,
       maxTokens: 120,
@@ -130,7 +193,104 @@ export default function PracticeTable() {
     }, delay);
 
     return () => window.clearTimeout(timer);
-  }, [game, aiMode, openRouterSeatAgent]);
+  }, [game, aiMode, openRouterSeatAgent, scoreNetStatus.checkpoint]);
+
+  useEffect(() => {
+    if (typeof Worker === 'undefined') {
+      return undefined;
+    }
+
+    const worker = new Worker(new URL('./workers/legacyAiWorker.ts', import.meta.url), { type: 'module' });
+    worker.onmessage = (event: MessageEvent<LegacyAiWorkerResponse>) => {
+      const pending = legacyWorkerPendingRef.current.get(event.data.id);
+      if (!pending) {
+        return;
+      }
+      legacyWorkerPendingRef.current.delete(event.data.id);
+      pending.resolve(event.data.decision);
+    };
+    worker.onerror = (event: ErrorEvent) => {
+      const error = new Error(event.message || 'Legacy AI worker failed');
+      for (const pending of legacyWorkerPendingRef.current.values()) {
+        pending.reject(error);
+      }
+      legacyWorkerPendingRef.current.clear();
+      legacyWorkerRef.current = null;
+    };
+    legacyWorkerRef.current = worker;
+
+    return () => {
+      for (const pending of legacyWorkerPendingRef.current.values()) {
+        pending.reject(new Error('Legacy AI worker terminated'));
+      }
+      legacyWorkerPendingRef.current.clear();
+      worker.terminate();
+      legacyWorkerRef.current = null;
+    };
+  }, []);
+
+  function chooseLegacyDecision(state: GameState, actingSeat: 1 | 2 | 3): Promise<ReturnType<typeof chooseAiAction>> {
+    const worker = legacyWorkerRef.current;
+    if (!worker) {
+      return Promise.resolve(chooseAiAction(state, actingSeat, PRACTICE_LEGACY_PROFILE));
+    }
+
+    const id = legacyWorkerRequestIdRef.current;
+    legacyWorkerRequestIdRef.current += 1;
+    const request: LegacyAiWorkerRequest = {
+      id,
+      state,
+      seat: actingSeat,
+      profile: PRACTICE_LEGACY_PROFILE,
+    };
+
+    return new Promise((resolve, reject) => {
+      legacyWorkerPendingRef.current.set(id, { resolve, reject });
+      worker.postMessage(request);
+    });
+  }
+
+  async function refreshScoreNetStatus(): Promise<void> {
+    try {
+      const response = await fetch('/api/scorenet/status');
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      const status = (await response.json()) as ScoreNetStatus;
+      setScoreNetStatus(status);
+      setScoreNetStatusText(
+        status.available && status.checkpoint ? `Ready: ${formatCheckpointLabel(status.checkpoint)}` : 'No PPO checkpoint found.',
+      );
+    } catch (error) {
+      setScoreNetStatus({ available: false, checkpoint: null });
+      setScoreNetStatusText(`Unavailable: ${error instanceof Error ? error.message : 'ScoreNet endpoint failed'}`);
+    }
+  }
+
+  async function loadLocalOpenRouterKey(existingKey: string): Promise<void> {
+    if (existingKey.trim()) {
+      return;
+    }
+
+    try {
+      const response = await fetch('/api/openrouter/local-key');
+      if (!response.ok) {
+        return;
+      }
+
+      const payload = (await response.json()) as OpenRouterLocalKeyResponse;
+      if (!payload.available || !payload.key) {
+        return;
+      }
+
+      setOpenRouterApiKey(payload.key);
+      setLocalKeySource(payload.source);
+      setLlmStatus(payload.source ? `已从本地 key 文件加载：${payload.source}` : '已从本地 key 文件加载');
+    } catch {
+      // Keep manual input flow when local key loading is unavailable.
+    }
+  }
 
   async function runAiTurn(actingSeat: 1 | 2 | 3): Promise<void> {
     if (aiMode === 'openrouter' && openRouterSeatAgent) {
@@ -155,7 +315,53 @@ export default function PracticeTable() {
       }
     }
 
-    const decision = chooseAiAction(game, actingSeat, PRACTICE_LEGACY_PROFILE);
+    if (aiMode === 'ppo') {
+      try {
+        const input = buildArenaTurnInput(game, actingSeat);
+        const heuristic = buildHeuristicContext(game, actingSeat);
+        const encoded = encodeTurnForPolicy(input, heuristic);
+        const response = await fetch('/api/scorenet/choose', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            checkpoint: scoreNetStatus.checkpoint,
+            stateFeatures: encoded.stateFeatures,
+            actionFeatures: encoded.actionFeatures,
+          }),
+        });
+        const choice = (await response.json()) as ScoreNetChoiceResponse;
+        if (!response.ok || choice.error) {
+          throw new Error(choice.error ?? `HTTP ${response.status}`);
+        }
+
+        const chosenIndex = Math.max(0, Math.min(choice.chosen_index ?? 0, input.legalActions.length - 1));
+        const chosen = input.legalActions[chosenIndex] ?? input.legalActions[0];
+        if (!chosen) {
+          throw new Error('PPO returned no legal action.');
+        }
+
+        const action: ArenaChosenAction = chosen.kind === 'pass' ? { kind: 'pass' } : { kind: 'play', actionId: chosen.actionId };
+        setGame((current) => {
+          if (current.winnerTeam !== null || current.currentPlayer !== actingSeat) {
+            return current;
+          }
+
+          return applyArenaChosenAction(current, actingSeat, action);
+        });
+        setLlmStatus(`ppo: ${formatCheckpointLabel(choice.checkpoint ?? scoreNetStatus.checkpoint ?? '')}`);
+        return;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'ScoreNet request failed';
+        setLlmStatus(`ppo fallback: ${message}`);
+      }
+    }
+
+    let decision: ReturnType<typeof chooseAiAction>;
+    try {
+      decision = await chooseLegacyDecision(game, actingSeat);
+    } catch {
+      decision = chooseAiAction(game, actingSeat, PRACTICE_LEGACY_PROFILE);
+    }
     setGame((current) => {
       if (current.winnerTeam !== null || current.currentPlayer !== actingSeat) {
         return current;
@@ -172,8 +378,10 @@ export default function PracticeTable() {
   const humanTurn = game.currentPlayer === 0 && game.winnerTeam === null;
   const canPass = humanTurn && game.tablePlay !== null;
   const canPlay = humanTurn && chosenPlay !== null;
-  const canOrganize = humanTurn && selectedIds.length >= 2;
-  const canRestore = humanTurn && organizedGroups.length > 0;
+  const canOrganize = humanTurn && selectedIds.length >= 2 && selectedOrganizedGroup === null;
+  const canRestoreSelected = humanTurn && selectedOrganizedGroup !== null;
+  const canRestoreAll = humanTurn && selectedIds.length === 0 && normalizedOrganizedGroups.length > 0;
+  const canRestore = canRestoreSelected || canRestoreAll;
   const showOrganizeAction = canOrganize;
   const showRestoreAction = !showOrganizeAction && canRestore;
   const organizeButtonLabel = showOrganizeAction ? '理牌' : '恢复';
@@ -227,6 +435,11 @@ export default function PracticeTable() {
     setOrganizedGroups([]);
   }
 
+  function handleStartGame(): void {
+    handleNewGame();
+    setGameStarted(true);
+  }
+
   function handleOrganize(): void {
     if (!canOrganize) {
       return;
@@ -243,12 +456,44 @@ export default function PracticeTable() {
     });
   }
 
-  function handleRestore(): void {
-    if (!canRestore) {
+  function handleRestoreSelected(): void {
+    if (!selectedOrganizedGroup) {
+      return;
+    }
+
+    setOrganizedGroups((current) => {
+      const target = new Set(selectedOrganizedGroup);
+      return current
+        .map((group) => group.filter((id) => !target.has(id)))
+        .filter((group) => group.length > 1);
+    });
+    setSelectedIds([]);
+    setSelectedOptionIndex(0);
+  }
+
+  function handleRestoreAll(): void {
+    if (!canRestoreAll) {
       return;
     }
 
     setOrganizedGroups([]);
+  }
+
+  if (!gameStarted) {
+    return (
+      <PracticeSetupScreen
+        aiMode={aiMode}
+        canStart={aiMode === 'openrouter' ? hasOpenRouterKey : aiMode === 'ppo' ? scoreNetStatus.available : true}
+        hasOpenRouterKey={hasOpenRouterKey}
+        onAiModeChange={setAiMode}
+        onOpenRouterApiKeyChange={setOpenRouterApiKey}
+        onRefreshScoreNet={refreshScoreNetStatus}
+        onStart={handleStartGame}
+        openRouterApiKey={openRouterApiKey}
+        scoreNetStatus={scoreNetStatus}
+        scoreNetStatusText={scoreNetStatusText}
+      />
+    );
   }
 
   return (
@@ -299,7 +544,7 @@ export default function PracticeTable() {
                 className="arrange-button restore"
                 data-keep-selection="true"
                 disabled={!showOrganizeAction && !showRestoreAction}
-                onClick={showOrganizeAction ? handleOrganize : handleRestore}
+                onClick={showOrganizeAction ? handleOrganize : canRestoreSelected ? handleRestoreSelected : handleRestoreAll}
                 type="button"
               >
                 {organizeButtonLabel}
@@ -352,6 +597,7 @@ export default function PracticeTable() {
       }
       leftBadges={[
         { label: '模式', value: '单机练习' },
+        { label: 'AI', value: aiModeLabel },
         { label: '主牌', value: 'A' },
       ]}
       onReset={handleNewGame}
@@ -384,8 +630,8 @@ export default function PracticeTable() {
           </div>
 
           <div className="hud-item wide">
-            <span className="label">LLM 对战（BYOK / OpenRouter）</span>
-            <strong>{aiModeLabel} · 仅支持 DeepSeek v3</strong>
+            <span className="label">AI 对战配置</span>
+            <strong>{aiModeLabel}</strong>
             <div className="hud-inline-actions">
               <button
                 className={`ghost-button hud-inline-button ${aiMode === 'legacy' ? 'active' : ''}`}
@@ -400,19 +646,31 @@ export default function PracticeTable() {
                 onClick={() => setAiMode('openrouter')}
                 type="button"
               >
-                DeepSeek v3
+                HY3
+              </button>
+              <button
+                className={`ghost-button hud-inline-button ${aiMode === 'ppo' ? 'active' : ''}`}
+                disabled={!scoreNetStatus.available}
+                onClick={() => setAiMode('ppo')}
+                type="button"
+              >
+                Latest PPO
               </button>
             </div>
             <div className="hud-key-row">
               <input
                 className="hud-key-input"
                 onChange={(event) => setOpenRouterApiKey(event.target.value)}
-                placeholder="sk-or-v1-...（你的 OpenRouter key）"
+                placeholder="sk-or-v1-...（HY3 使用的 OpenRouter key）"
                 type="password"
                 value={openRouterApiKey}
               />
             </div>
-            <span className="label">状态：{aiMode === 'openrouter' ? llmStatus : '未启用'}</span>
+            {localKeySource ? <span className="label">Key source: {localKeySource}</span> : null}
+            <span className="label">状态：{aiMode === 'legacy' ? '内置 AI' : aiMode === 'ppo' ? `${scoreNetStatusText} · ${llmStatus}` : llmStatus}</span>
+            <button className="link-button hud-switch" onClick={() => setGameStarted(false)} type="button">
+              配置新局
+            </button>
           </div>
 
           {selectedPlayOptions.length > 1 ? (
@@ -428,6 +686,109 @@ export default function PracticeTable() {
         </section>
       }
     />
+  );
+}
+
+function PracticeSetupScreen({
+  aiMode,
+  canStart,
+  hasOpenRouterKey,
+  onAiModeChange,
+  onOpenRouterApiKeyChange,
+  onRefreshScoreNet,
+  onStart,
+  openRouterApiKey,
+  scoreNetStatus,
+  scoreNetStatusText,
+}: {
+  aiMode: PracticeAiMode;
+  canStart: boolean;
+  hasOpenRouterKey: boolean;
+  onAiModeChange: (mode: PracticeAiMode) => void;
+  onOpenRouterApiKeyChange: (value: string) => void;
+  onRefreshScoreNet: () => void;
+  onStart: () => void;
+  openRouterApiKey: string;
+  scoreNetStatus: ScoreNetStatus;
+  scoreNetStatusText: string;
+}) {
+  return (
+    <section className="practice-setup-shell">
+      <header className="arena-setup-header">
+        <div>
+          <span className="eyebrow">Single Player Setup</span>
+          <h1>Choose Your Opponents</h1>
+          <p className="muted-copy">Seat 0 is you. Seats 1, 2, and 3 will use the AI option selected below.</p>
+        </div>
+        <a className="ghost-button app-nav-link" href="/">
+          Home
+        </a>
+      </header>
+
+      <section className="arena-setup-panel practice-setup-panel">
+        <div className="practice-ai-grid">
+          <button
+            className={`practice-ai-card ${aiMode === 'legacy' ? 'active' : ''}`}
+            onClick={() => onAiModeChange('legacy')}
+            type="button"
+          >
+            <span className="start-mode-kicker">Built-in</span>
+            <strong>legacy-v3.0</strong>
+            <p>Fast local heuristic AI. This is the default single-player opponent.</p>
+          </button>
+
+          <button
+            className={`practice-ai-card ${aiMode === 'ppo' ? 'active' : ''}`}
+            disabled={!scoreNetStatus.available}
+            onClick={() => onAiModeChange('ppo')}
+            type="button"
+          >
+            <span className="start-mode-kicker">Local PPO</span>
+            <strong>Latest ScoreNet PPO</strong>
+            <p>{scoreNetStatusText}</p>
+          </button>
+
+          <button
+            className={`practice-ai-card ${aiMode === 'openrouter' ? 'active' : ''}`}
+            disabled={!hasOpenRouterKey}
+            onClick={() => onAiModeChange('openrouter')}
+            type="button"
+          >
+            <span className="start-mode-kicker">BYOK</span>
+            <strong>HY3</strong>
+            <p>Uses local key file first, then manual OpenRouter key; falls back to legacy-v3.0 on errors.</p>
+          </button>
+        </div>
+
+        <div className="practice-setup-controls">
+          <label className="agent-form-field">
+            <span>OpenRouter key for HY3 mode</span>
+            <input
+              onChange={(event) => onOpenRouterApiKeyChange(event.target.value)}
+              placeholder="sk-or-v1-..."
+              type="password"
+              value={openRouterApiKey}
+            />
+          </label>
+
+          <div className="practice-status-box">
+            <span className="label">PPO endpoint</span>
+            <strong>{scoreNetStatus.available ? 'Available' : 'Unavailable'}</strong>
+            <p>{scoreNetStatus.checkpoint ? formatCheckpointLabel(scoreNetStatus.checkpoint) : scoreNetStatusText}</p>
+            <button className="ghost-button small" onClick={onRefreshScoreNet} type="button">
+              Refresh PPO
+            </button>
+          </div>
+        </div>
+
+        <div className="arena-setup-actions">
+          <button className="primary-button" disabled={!canStart} onClick={onStart} type="button">
+            Start Single Player Game
+          </button>
+          {!canStart ? <span className="muted-copy">Selected AI is not ready yet.</span> : null}
+        </div>
+      </section>
+    </section>
   );
 }
 
@@ -522,6 +883,45 @@ function renderFinishOrder(game: GameState): string {
   }
 
   return game.finishOrder.map((seat) => game.players[seat].name).join(' / ');
+}
+
+function formatCheckpointLabel(checkpoint: string): string {
+  if (!checkpoint) return 'Latest PPO checkpoint';
+  const marker = 'training/scorenet/checkpoints/';
+  const markerIndex = checkpoint.indexOf(marker);
+  return markerIndex >= 0 ? checkpoint.slice(markerIndex + marker.length) : checkpoint;
+}
+
+function formatOpenRouterStatus(code: string): string {
+  if (code === 'requesting') {
+    return 'hy3: 请求中';
+  }
+
+  if (code === 'success') {
+    return 'hy3: 已出牌';
+  }
+
+  if (code === 'request_error') {
+    return 'hy3: 接口失败';
+  }
+
+  if (code === 'invalid_json') {
+    return 'hy3: 返回格式异常';
+  }
+
+  if (code === 'repairing') {
+    return 'hy3: 修复中';
+  }
+
+  if (code === 'repair_success') {
+    return 'hy3: 修复成功';
+  }
+
+  if (code === 'fallback') {
+    return 'hy3: 已回退到 legacy';
+  }
+
+  return 'hy3: 已跳过';
 }
 
 interface StraightFlushHint {

@@ -71,6 +71,8 @@ export function createHeuristicAgent(config?: { id?: string; label?: string; pro
           ? 'guandan-ai v1'
         : profile?.startsWith('legacy-v2.')
           ? `guandan-ai ${profile.replace('legacy-', '')}`
+        : profile?.startsWith('legacy-v3.')
+          ? `guandan-ai ${profile.replace('legacy-', '')}`
           : 'guandan-ai v2 balanced'),
     agentType: 'heuristic',
     decideTurn(input, context) {
@@ -294,7 +296,15 @@ export function validateArenaChosenAction(
       throw new Error('Play actions must include actionId.');
     }
 
-    if (legalActions && !legalActions.some((item) => item.kind === 'play' && item.actionId === action.actionId)) {
+    const normalizedAction =
+      legalActions && !action.actionId.startsWith('play:')
+        ? {
+            ...action,
+            actionId: `play:${action.actionId}`,
+          }
+        : action;
+
+    if (legalActions && !legalActions.some((item) => item.kind === 'play' && item.actionId === normalizedAction.actionId)) {
       const legalIds = legalActions
         .filter((item) => item.kind === 'play')
         .map((item) => item.actionId)
@@ -302,7 +312,7 @@ export function validateArenaChosenAction(
       throw new Error(`Illegal play actionId "${action.actionId}". Legal play ids: ${legalIds}`);
     }
 
-    return action;
+    return normalizedAction;
   }
 
   if (legalActions && !legalActions.some((item) => item.kind === 'pass')) {

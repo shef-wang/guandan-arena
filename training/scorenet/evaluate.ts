@@ -121,7 +121,7 @@ async function main(): Promise<void> {
   const baseSeed = Number(process.env.BASE_SEED ?? '20260416');
   const checkpoint = process.env.CHECKPOINT;
   const pythonBin = process.env.PYTHON_BIN ?? '.venv-danzero/bin/python';
-  const opponentProfile = (process.env.OPPONENT_PROFILE ?? 'legacy-v2.7') as AiProfile;
+  const opponentProfile = (process.env.OPPONENT_PROFILE ?? 'legacy-v3.0') as AiProfile;
   const cpuFraction = Number(process.env.CPU_FRACTION ?? '1.0');
   const mpsMemoryFraction = Number(process.env.MPS_MEMORY_FRACTION ?? '0.95');
   const scoreNetDevice = process.env.SCORENET_DEVICE ?? null;

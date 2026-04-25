@@ -6,14 +6,19 @@ import { OPENROUTER_DEFAULT_RERANKER_MODEL } from './openrouter';
 
 const DEEPSEEK_V3_MODEL = 'deepseek/deepseek-chat-v3-0324';
 const KIMI_K25_MODEL = 'moonshotai/kimi-k2.5';
+const KIMI_K26_MODEL = 'moonshotai/kimi-k2.6';
 const GEMMA_4_MODEL = 'google/gemma-4-26b-a4b-it';
+const TENCENT_HY3_MODEL = 'tencent/hy3-preview:free';
 
 type SeatStrategyId =
   | 'legacy-v1'
+  | 'legacy-v3'
   | 'legacy-vR'
   | 'llmreranker-deepseek'
   | 'deepseek-v3'
   | 'kimi-k2.5'
+  | 'kimi-k2.6'
+  | 'hy3-preview'
   | 'gemma-4-26b';
 
 interface SeatStrategyOption {
@@ -43,6 +48,14 @@ const SEAT_STRATEGY_OPTIONS: SeatStrategyOption[] = [
     usesRemoteModel: false,
   },
   {
+    id: 'legacy-v3',
+    label: 'guandan-ai v3.0',
+    mode: 'builtin-legacy-v3',
+    model: '',
+    note: '本地 legacy-v3.0 policy ensemble，不请求外部模型。',
+    usesRemoteModel: false,
+  },
+  {
     id: 'llmreranker-deepseek',
     label: 'LLM Reranker · DeepSeek Chat V3 0324',
     mode: 'llmreranker',
@@ -64,6 +77,22 @@ const SEAT_STRATEGY_OPTIONS: SeatStrategyOption[] = [
     mode: 'openrouter',
     model: KIMI_K25_MODEL,
     note: '直接用 Kimi K2.5 出牌。',
+    usesRemoteModel: true,
+  },
+  {
+    id: 'kimi-k2.6',
+    label: 'Kimi K2.6',
+    mode: 'openrouter',
+    model: KIMI_K26_MODEL,
+    note: '通过 OpenRouter 默认路由调用 Kimi K2.6；已使用 JSON 模式和更长超时。',
+    usesRemoteModel: true,
+  },
+  {
+    id: 'hy3-preview',
+    label: 'Tencent HY3 Preview (free)',
+    mode: 'openrouter',
+    model: TENCENT_HY3_MODEL,
+    note: '通过 OpenRouter 直接调用 Tencent HY3 Preview free 模型出牌。',
     usesRemoteModel: true,
   },
   {
@@ -285,13 +314,25 @@ function getSelectedSeatStrategyId(config: SpectatorSeatConfig): SeatStrategyId 
     return 'legacy-vR';
   }
 
+  if (config.mode === 'builtin-legacy-v3') {
+    return 'legacy-v3';
+  }
+
   if (config.mode === 'openrouter') {
     if (config.model === KIMI_K25_MODEL) {
       return 'kimi-k2.5';
     }
 
+    if (config.model === KIMI_K26_MODEL) {
+      return 'kimi-k2.6';
+    }
+
     if (config.model === GEMMA_4_MODEL) {
       return 'gemma-4-26b';
+    }
+
+    if (config.model === TENCENT_HY3_MODEL) {
+      return 'hy3-preview';
     }
 
     return 'deepseek-v3';

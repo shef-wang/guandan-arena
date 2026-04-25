@@ -314,6 +314,82 @@ button {
   max-width: 1000px;
 }
 
+.practice-setup-shell {
+  width: min(100vw - 32px, 1100px);
+  min-height: calc(100vh - 32px);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 18px;
+}
+
+.practice-setup-panel {
+  display: grid;
+  gap: 18px;
+}
+
+.practice-ai-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.practice-ai-card {
+  min-height: 180px;
+  padding: 18px;
+  text-align: left;
+  color: #f5f9ff;
+  border: 1px solid rgba(219, 235, 255, 0.16);
+  border-radius: 22px;
+  background: rgba(11, 28, 66, 0.48);
+  cursor: pointer;
+  transition:
+    border-color 0.18s ease,
+    transform 0.18s ease,
+    background 0.18s ease;
+}
+
+.practice-ai-card:hover {
+  transform: translateY(-2px);
+  border-color: rgba(251, 226, 125, 0.42);
+}
+
+.practice-ai-card.active {
+  border-color: rgba(251, 226, 125, 0.88);
+  background: rgba(251, 226, 125, 0.12);
+}
+
+.practice-ai-card:disabled {
+  cursor: not-allowed;
+  opacity: 0.52;
+}
+
+.practice-ai-card strong {
+  display: block;
+  margin-top: 8px;
+  font-size: 1.25rem;
+}
+
+.practice-ai-card p,
+.practice-status-box p {
+  color: rgba(239, 245, 255, 0.76);
+  line-height: 1.5;
+}
+
+.practice-setup-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(260px, 0.65fr);
+  gap: 14px;
+  align-items: stretch;
+}
+
+.practice-status-box {
+  padding: 14px;
+  border: 1px solid rgba(219, 235, 255, 0.14);
+  border-radius: 18px;
+  background: rgba(7, 20, 48, 0.38);
+}
+
 .arena-form-error {
   margin-bottom: 14px;
   padding: 12px 14px;
@@ -936,6 +1012,27 @@ button {
   height: 102px;
 }
 
+.playing-card.grouped .corner {
+  position: absolute;
+  top: 7px;
+  left: 8px;
+  right: 8px;
+  z-index: 1;
+  flex-direction: row;
+  align-items: center;
+  gap: 3px;
+  white-space: nowrap;
+}
+
+.playing-card.grouped .corner strong {
+  font-size: 1.12rem;
+}
+
+.playing-card.grouped .corner span {
+  font-size: 1.02rem;
+  line-height: 1;
+}
+
 .playing-card.compact {
   width: 44px;
   height: 66px;
@@ -1027,6 +1124,14 @@ button {
   font-family: 'Baskerville', 'Songti SC', 'STSong', serif;
   font-size: 1.55rem;
   opacity: 0.9;
+}
+
+.playing-card.grouped .center-glyph {
+  inset: auto 0 9px 0;
+  align-items: flex-end;
+  justify-content: center;
+  font-size: 1rem;
+  opacity: 0.28;
 }
 
 .playing-card.compact .center-glyph {

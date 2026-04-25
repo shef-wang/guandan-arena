@@ -3,17 +3,15 @@ import { getSeatStatus } from '../game/state';
 import type { GameState, Seat } from '../game/types';
 import GameTableScene from '../table/GameTableScene';
 import { PlayingCard, formatPlacementKey } from '../ui/tableWidgets';
-import { createHeuristicAgent, formatTurnInputAsPrompt, GuandanArenaMatch } from './index';
+import { formatTurnInputAsPrompt, GuandanArenaMatch } from './index';
 import {
-  createOpenRouterAgent,
-  createOpenRouterRerankerAgent,
-  OPENROUTER_DEFAULT_BASE_URL,
   OPENROUTER_DEFAULT_RERANKER_MODEL,
   type OpenRouterStatusCode,
   type OpenRouterStatusEvent,
 } from './openrouter';
-import type { SpectatorArenaConfig, SpectatorGlobalConfig, SpectatorSeatConfig } from './spectatorConfig';
+import type { SpectatorArenaConfig, SpectatorSeatConfig } from './spectatorConfig';
 import { getSeatDisplayLabel, getSeatSubtitle, getSeatTitle, trimEndpoint } from './spectatorConfig';
+import { createSpectatorMatch } from './spectatorMatch';
 
 const DEFAULT_DELAY_MS = 900;
 const ARENA_SEATS = [0, 1, 2, 3] as const;
@@ -43,7 +41,12 @@ export default function ArenaSpectator({ config }: { config: SpectatorArenaConfi
   const [copiedPrompt, setCopiedPrompt] = useState(false);
   const llmStatusSequenceRef = useRef(0);
 
-  const matchRef = useRef<GuandanArenaMatch>(createSpectatorMatch(config, appendLlmStatus));
+  const matchRef = useRef<GuandanArenaMatch>(
+    createSpectatorMatch(config, {
+      onLlmStatus: appendLlmStatus,
+      siteUrl: typeof window !== 'undefined' ? window.location.origin : undefined,
+    }),
+  );
   const [game, setGame] = useState<GameState>(() => matchRef.current.getState());
   const remoteSeats = ARENA_SEATS.filter((seat) => usesRemoteModel(config.seatConfigs[seat]));
 
@@ -59,7 +62,10 @@ export default function ArenaSpectator({ config }: { config: SpectatorArenaConfi
   }));
 
   useEffect(() => {
-    matchRef.current = createSpectatorMatch(config, appendLlmStatus);
+    matchRef.current = createSpectatorMatch(config, {
+      onLlmStatus: appendLlmStatus,
+      siteUrl: typeof window !== 'undefined' ? window.location.origin : undefined,
+    });
     setGame(matchRef.current.getState());
     setRuntimeError(null);
     setAutoRun(false);
@@ -175,7 +181,10 @@ export default function ArenaSpectator({ config }: { config: SpectatorArenaConfi
   }
 
   function handleRestart(): void {
-    matchRef.current = createSpectatorMatch(config, appendLlmStatus);
+    matchRef.current = createSpectatorMatch(config, {
+      onLlmStatus: appendLlmStatus,
+      siteUrl: typeof window !== 'undefined' ? window.location.origin : undefined,
+    });
     setGame(matchRef.current.getState());
     setRuntimeError(null);
     setAutoRun(false);
@@ -525,85 +534,6 @@ export default function ArenaSpectator({ config }: { config: SpectatorArenaConfi
   );
 }
 
-function createSpectatorMatch(
-  config: SpectatorArenaConfig,
-  onLlmStatus?: (entry: OpenRouterStatusEvent) => void,
-): GuandanArenaMatch {
-  return new GuandanArenaMatch({
-    agents: [
-      resolveSeatAgent(config.seatConfigs[0], config.globalConfig, 0, onLlmStatus),
-      resolveSeatAgent(config.seatConfigs[1], config.globalConfig, 1, onLlmStatus),
-      resolveSeatAgent(config.seatConfigs[2], config.globalConfig, 2, onLlmStatus),
-      resolveSeatAgent(config.seatConfigs[3], config.globalConfig, 3, onLlmStatus),
-    ],
-  });
-}
-
-function resolveSeatAgent(
-  seatConfig: SpectatorSeatConfig,
-  globalConfig: SpectatorGlobalConfig,
-  seat: Seat,
-  onLlmStatus?: (entry: OpenRouterStatusEvent) => void,
-) {
-  if (seatConfig.mode === 'builtin-balanced-v2') {
-    return createHeuristicAgent({
-      id: `builtin-balanced-seat-${seat}`,
-      label: seatConfig.label || `Seat ${seat} Balanced`,
-      profile: 'balanced-v2',
-    });
-  }
-
-  if (seatConfig.mode === 'builtin-legacy-vR') {
-    return createHeuristicAgent({
-      id: `builtin-legacy-vr-seat-${seat}`,
-      label: seatConfig.label || `Seat ${seat} Legacy vR`,
-      profile: 'legacy-vR',
-    });
-  }
-
-  if (seatConfig.mode === 'builtin-legacy-v1') {
-    return createHeuristicAgent({
-      id: `builtin-legacy-seat-${seat}`,
-      label: seatConfig.label || `Seat ${seat} Legacy`,
-      profile: 'legacy-v1',
-    });
-  }
-
-  if (seatConfig.mode === 'builtin-baseline') {
-    return createHeuristicAgent({
-      id: `builtin-baseline-seat-${seat}`,
-      label: seatConfig.label || `Seat ${seat} Baseline`,
-      profile: 'baseline',
-    });
-  }
-
-  if (seatConfig.mode === 'llmreranker') {
-    return createOpenRouterRerankerAgent({
-      id: `llmreranker-seat-${seat}`,
-      label: seatConfig.label || `Seat ${seat} LLM Reranker`,
-      apiKey: seatConfig.apiKey.trim() || globalConfig.apiKey.trim(),
-      model: seatConfig.model.trim() || OPENROUTER_DEFAULT_RERANKER_MODEL,
-      baseUrl: globalConfig.baseUrl.trim() || OPENROUTER_DEFAULT_BASE_URL,
-      siteName: 'Guandan Arena',
-      siteUrl: typeof window !== 'undefined' ? window.location.origin : undefined,
-      seat,
-      onStatus: onLlmStatus,
-    });
-  }
-
-  return createOpenRouterAgent({
-    id: `openrouter-seat-${seat}`,
-    label: seatConfig.label || `Seat ${seat} LLM`,
-    apiKey: seatConfig.apiKey.trim() || globalConfig.apiKey.trim(),
-    model: seatConfig.model.trim(),
-    baseUrl: globalConfig.baseUrl.trim() || OPENROUTER_DEFAULT_BASE_URL,
-    siteName: 'Guandan Arena',
-    siteUrl: typeof window !== 'undefined' ? window.location.origin : undefined,
-    seat,
-    onStatus: onLlmStatus,
-  });
-}
-
 function getErrorMessage(error: unknown): string {
   if (error instanceof Error) {
     return error.message;
@@ -619,6 +549,10 @@ function getSeatModeSummary(config: SpectatorSeatConfig): string {
 
   if (config.mode === 'builtin-legacy-vR') {
     return 'guandan-ai vR';
+  }
+
+  if (config.mode === 'builtin-legacy-v3') {
+    return 'guandan-ai v3.0';
   }
 
   if (config.mode === 'builtin-legacy-v1') {

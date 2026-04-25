@@ -7,6 +7,7 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
+    "arena:headless": "esbuild src/arena/runSpectatorConfig.ts --bundle --platform=node --format=cjs --outfile=/tmp/runSpectatorConfig.cjs && node /tmp/runSpectatorConfig.cjs",
     "server:build": "esbuild server/index.ts --bundle --platform=node --format=esm --outfile=server/dist/index.mjs --external:ws --banner:js=\"import{createRequire}from'module';const require=createRequire(import.meta.url);\"",
     "server:start": "npm run server:build && node server/dist/index.mjs",
     "server:dev": "npm run server:build && node --watch server/dist/index.mjs"

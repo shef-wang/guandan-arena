@@ -114,12 +114,14 @@ def main() -> None:
     parser.add_argument("--output-dir", default="training/scorenet/checkpoints/ppo_run_001")
     parser.add_argument("--epochs", type=int, default=4)
     parser.add_argument("--batch-size", type=int, default=128)
+    parser.add_argument("--num-workers", type=int, default=0)
     parser.add_argument("--seed", type=int, default=20260416)
-    parser.add_argument("--learning-rate", type=float, default=3e-4)
-    parser.add_argument("--clip-eps", type=float, default=0.15)
+    parser.add_argument("--learning-rate", type=float, default=1e-4)
+    parser.add_argument("--clip-eps", type=float, default=0.1)
     parser.add_argument("--entropy-coef", type=float, default=0.01)
     parser.add_argument("--value-coef", type=float, default=0.5)
     parser.add_argument("--max-grad-norm", type=float, default=1.0)
+    parser.add_argument("--target-kl", type=float, default=0.03)
     parser.add_argument("--cpu-fraction", type=float, default=0.8)
     parser.add_argument("--mps-memory-fraction", type=float, default=0.8)
     parser.add_argument("--device", default=None)
@@ -132,7 +134,15 @@ def main() -> None:
     device = pick_device(args.device)
     runtime_config = configure_runtime(device, args.cpu_fraction, args.mps_memory_fraction)
     dataset = JsonlDataset(args.rollout)
-    loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, collate_fn=collate_batch)
+    num_workers = max(0, int(args.num_workers))
+    loader = DataLoader(
+        dataset,
+        batch_size=args.batch_size,
+        shuffle=True,
+        collate_fn=collate_batch,
+        num_workers=num_workers,
+        persistent_workers=num_workers > 0,
+    )
 
     model, base_meta = load_checkpoint(args.init_checkpoint, device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate, weight_decay=1e-4)
@@ -179,6 +189,7 @@ def main() -> None:
         total_ratio = 0.0
         total_clip_fraction = 0.0
         total_approx_kl = 0.0
+        early_stop_triggered = False
 
         for states, actions, legal_mask, chosen_action_indices, old_log_probs, target_returns, advantages in loader:
             states = states.to(device)
@@ -222,6 +233,12 @@ def main() -> None:
             total_clip_fraction += ((ratios - 1.0).abs() > args.clip_eps).float().mean().item() * batch_size
             total_approx_kl += (old_log_probs - chosen_log_probs).mean().item() * batch_size
 
+            if args.target_kl > 0:
+                mean_approx_kl = total_approx_kl / max(total_examples, 1)
+                if mean_approx_kl > args.target_kl:
+                    early_stop_triggered = True
+                    break
+
         epoch_seconds = time.perf_counter() - epoch_start
         samples_per_second = total_examples / epoch_seconds if epoch_seconds > 0 else None
         record = {
@@ -235,6 +252,8 @@ def main() -> None:
             "approx_kl": round(total_approx_kl / max(total_examples, 1), 6),
             "epoch_seconds": round(epoch_seconds, 3),
             "samples_per_second": round(samples_per_second, 2) if samples_per_second else None,
+            "target_kl": args.target_kl if args.target_kl > 0 else None,
+            "early_stop_kl": early_stop_triggered,
         }
         record.update(get_device_stats(device))
         history.append(record)

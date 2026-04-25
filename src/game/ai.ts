@@ -595,10 +595,13 @@ export function chooseLegacyV29AiAction(state: GameState, seat: Seat): AiDecisio
   return chooseLegacyV27AiAction(state, seat);
 }
 
-const V30_ROOT_TOP_K = 5;
+const V30_ROOT_TOP_K_EARLY = 5;
+const V30_ROOT_TOP_K_MID = 4;
+const V30_ROOT_TOP_K_LATE = 3;
 const V30_PRIOR_WEIGHT = 0.3;
 const V30_V21_ADJUSTMENT_WEIGHT = 0.35;
-const V30_ROLLOUT_MAX_STEPS = 220;
+const V30_ROLLOUT_MAX_STEPS_EARLY = 220;
+const V30_ROLLOUT_MAX_STEPS_LATE = 180;
 
 type V30RolloutPolicy = (state: GameState, seat: Seat, rootSeat: Seat) => AiDecision;
 
@@ -621,7 +624,17 @@ export function chooseLegacyV30AiAction(state: GameState, seat: Seat): AiDecisio
     return { type: 'play', play: finishNow };
   }
 
-  const ranked = rankLegacyV1ActionCandidates(state, seat).slice(0, V30_ROOT_TOP_K);
+  const latePhase = state.actionHistory.length >= 18 || player.hand.length <= 9;
+  const rootTopK =
+    player.hand.length <= 7
+      ? V30_ROOT_TOP_K_LATE
+      : latePhase
+        ? V30_ROOT_TOP_K_MID
+        : V30_ROOT_TOP_K_EARLY;
+  const rolloutMaxSteps = latePhase ? V30_ROLLOUT_MAX_STEPS_LATE : V30_ROLLOUT_MAX_STEPS_EARLY;
+  const rolloutPolicies = latePhase ? V30_ROLLOUT_POLICIES.slice(0, 2) : V30_ROLLOUT_POLICIES;
+
+  const ranked = rankLegacyV1ActionCandidates(state, seat).slice(0, rootTopK);
   if (ranked.length === 0) {
     return { type: 'pass' };
   }
@@ -637,11 +650,11 @@ export function chooseLegacyV30AiAction(state: GameState, seat: Seat): AiDecisio
     const nextState = applyCandidateAction(state, seat, action);
 
     let terminalSum = 0;
-    for (const policy of V30_ROLLOUT_POLICIES) {
-      const terminalState = simulateV30PolicyToTerminal(nextState, seat, policy, V30_ROLLOUT_MAX_STEPS);
+    for (const policy of rolloutPolicies) {
+      const terminalState = simulateV30PolicyToTerminal(nextState, seat, policy, rolloutMaxSteps);
       terminalSum += scoreTerminalTeamOutcome(terminalState, team);
     }
-    const avgTerminal = terminalSum / V30_ROLLOUT_POLICIES.length;
+    const avgTerminal = terminalSum / rolloutPolicies.length;
 
     let score = candidate.score * V30_PRIOR_WEIGHT;
     score += scoreLegacyV21ActionAdjustment(state, seat, action) * V30_V21_ADJUSTMENT_WEIGHT;
