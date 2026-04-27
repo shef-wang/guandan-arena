@@ -28,17 +28,42 @@ EVAL_WORKERS="${EVAL_WORKERS:-8}"
 STOP_WHEN_BEAT="${STOP_WHEN_BEAT:-1}"
 STOP_MIN_NET_DELTA="${STOP_MIN_NET_DELTA:-1}"
 STOP_MIN_WIN_RATE="${STOP_MIN_WIN_RATE:-0.5}"
+# PPO: entropy bonus (higher = more exploration; default matches train_ppo.py)
+PPO_ENTROPY_COEF="${PPO_ENTROPY_COEF:-0.01}"
+# After every N iterations, copy the post-PPO checkpoint into SNAPSHOT_DIR and append to PRIOR_FILE (capped).
+SNAPSHOT_EVERY_ITERS="${SNAPSHOT_EVERY_ITERS:-0}"
+SNAPSHOT_MAX="${SNAPSHOT_MAX:-10}"
+SNAPSHOT_DIR="${SNAPSHOT_DIR:-}"
+# One .pt path per line; FROZEN_PRIOR_CHECKPOINTS for each rollout is rebuilt from this file unless overridden below.
+PRIOR_FILE="${PRIOR_FILE:-}"
+# Streak: stop after this many consecutive evals with winRate>STOP_MIN and net>=STOP_MIN_NET (0=disabled).
+STOP_STREAK="${STOP_STREAK:-0}"
+EVAL_STREAK_FILE="${EVAL_STREAK_FILE:-}"
 
 IMITATION_TRAIN="${IMITATION_TRAIN:-training/scorenet/data/imitation_train.jsonl}"
 IMITATION_VALID="${IMITATION_VALID:-training/scorenet/data/imitation_valid.jsonl}"
 CHECKPOINT_ROOT="${CHECKPOINT_ROOT:-training/scorenet/checkpoints}"
 INIT_CHECKPOINT="${INIT_CHECKPOINT:-}"
 TIMESTAMPED_LOGGING="${TIMESTAMPED_LOGGING:-1}"
+# Append a line every N seconds to RUN_LOG_PATH even when Node/Python is block-buffered (v1-style heartbeat).
+LOG_HEARTBEAT_SECS="${LOG_HEARTBEAT_SECS:-60}"
 RUN_LOG_PATH="${RUN_LOG_PATH:-}"
+HEARTBEAT_PID=""
 
 EXPORT_IMITATION_BUNDLE="/tmp/scorenet_export_imitation.cjs"
 EXPORT_PPO_BUNDLE="/tmp/scorenet_export_ppo.cjs"
 EVAL_BUNDLE="/tmp/scorenet_eval.cjs"
+
+# Line-buffer child stdout/stderr when GNU stdbuf is available (common on Homebrew coreutils: gstdbuf).
+linebuf() {
+  if command -v stdbuf >/dev/null 2>&1; then
+    stdbuf -oL -eL -- "$@"
+  elif command -v gstdbuf >/dev/null 2>&1; then
+    gstdbuf -oL -eL -- "$@"
+  else
+    "$@"
+  fi
+}
 
 mkdir -p "$CHECKPOINT_ROOT"
 mkdir -p training/scorenet/data
@@ -48,17 +73,36 @@ if [[ "$TIMESTAMPED_LOGGING" == "1" ]]; then
     RUN_LOG_PATH="$CHECKPOINT_ROOT/selfplay_$(date +%Y%m%d_%H%M%S).log"
   fi
   mkdir -p "$(dirname "$RUN_LOG_PATH")"
+  # Touch + immediate lines: works even if Node/Python block-buffer the main pipe (v3.0 rollouts are slow).
+  : >> "$RUN_LOG_PATH"
+  printf '[%s] [scorenet] (pre-exec) writing this file: %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$RUN_LOG_PATH" >> "$RUN_LOG_PATH" || true
+  if [[ -n "$LOG_HEARTBEAT_SECS" && "$LOG_HEARTBEAT_SECS" -gt 0 ]]; then
+    (
+      printf '[%s] [scorenet] heartbeat: started (repeating every %ss; PROGRESS_EVERY_MATCHES in rollout log)\n' \
+        "$(date '+%Y-%m-%d %H:%M:%S')" "$LOG_HEARTBEAT_SECS" >> "$RUN_LOG_PATH" || true
+      while true; do
+        sleep "$LOG_HEARTBEAT_SECS" || break
+        printf '[%s] [scorenet] heartbeat: still running\n' "$(date '+%Y-%m-%d %H:%M:%S')" >> "$RUN_LOG_PATH" || true
+      done
+    ) &
+    HEARTBEAT_PID=$!
+  fi
+  trap 'if [[ -n "$HEARTBEAT_PID" ]]; then kill "$HEARTBEAT_PID" 2>/dev/null || true; fi' EXIT
+  export PYTHONUNBUFFERED=1
   exec > >(
     perl -MPOSIX=strftime -ne 'print "[".strftime("%Y-%m-%d %H:%M:%S", localtime)."] $_";' \
       | tee -a "$RUN_LOG_PATH"
   ) 2>&1
   echo "[scorenet] timestamped logging enabled: $RUN_LOG_PATH"
+  if [[ -n "$HEARTBEAT_PID" ]]; then
+    echo "[scorenet] file heartbeat: every $LOG_HEARTBEAT_SECS s -> $RUN_LOG_PATH (LOG_HEARTBEAT_SECS=0 to disable)"
+  fi
 fi
 
 echo "[scorenet] bundling TypeScript scripts..."
-npx esbuild training/scorenet/export_imitation_dataset.ts --bundle --platform=node --format=cjs --outfile="$EXPORT_IMITATION_BUNDLE"
-npx esbuild training/scorenet/export_ppo_rollouts.ts --bundle --platform=node --format=cjs --outfile="$EXPORT_PPO_BUNDLE"
-npx esbuild training/scorenet/evaluate.ts --bundle --platform=node --format=cjs --outfile="$EVAL_BUNDLE"
+linebuf npx esbuild training/scorenet/export_imitation_dataset.ts --bundle --platform=node --format=cjs --outfile="$EXPORT_IMITATION_BUNDLE"
+linebuf npx esbuild training/scorenet/export_ppo_rollouts.ts --bundle --platform=node --format=cjs --outfile="$EXPORT_PPO_BUNDLE"
+linebuf npx esbuild training/scorenet/evaluate.ts --bundle --platform=node --format=cjs --outfile="$EVAL_BUNDLE"
 
 if [[ -z "$INIT_CHECKPOINT" ]]; then
   echo "[scorenet] no INIT_CHECKPOINT supplied; generating imitation dataset..."
@@ -66,11 +110,11 @@ if [[ -z "$INIT_CHECKPOINT" ]]; then
   BASE_SEED="$BASE_SEED" \
   TRAIN_OUTPUT_PATH="$IMITATION_TRAIN" \
   VALID_OUTPUT_PATH="$IMITATION_VALID" \
-  node "$EXPORT_IMITATION_BUNDLE"
+  linebuf node "$EXPORT_IMITATION_BUNDLE"
 
   IMITATION_RUN_DIR="$CHECKPOINT_ROOT/imitation_run_$(date +%Y%m%d_%H%M%S)"
   echo "[scorenet] training imitation checkpoint at $IMITATION_RUN_DIR ..."
-  "$PYTHON_BIN" training/scorenet/train_imitation.py \
+  linebuf "$PYTHON_BIN" training/scorenet/train_imitation.py \
     --train "$IMITATION_TRAIN" \
     --valid "$IMITATION_VALID" \
     --output-dir "$IMITATION_RUN_DIR" \
@@ -82,7 +126,33 @@ fi
 CURRENT_CHECKPOINT="$INIT_CHECKPOINT"
 echo "[scorenet] starting PPO loop from: $CURRENT_CHECKPOINT"
 
+# Prior snapshots for hybrid self-play (comma list to export_ppo_rollouts).
+if [[ -z "$SNAPSHOT_DIR" ]]; then
+  SNAPSHOT_DIR="$CHECKPOINT_ROOT/prior_snapshots"
+fi
+mkdir -p "$SNAPSHOT_DIR"
+if [[ -z "$PRIOR_FILE" ]]; then
+  PRIOR_FILE="$SNAPSHOT_DIR/manifest.txt"
+fi
+: >> "$PRIOR_FILE"
+if [[ -z "$EVAL_STREAK_FILE" ]]; then
+  EVAL_STREAK_FILE="$CHECKPOINT_ROOT/eval_streak_state.json"
+fi
+
+rebuild_frozen_prior_csv() {
+  if [[ ! -f "$PRIOR_FILE" ]]; then
+    FROZEN_PRIOR_CHECKPOINTS_EXPORT=""
+    return 0
+  fi
+  # grep exits 1 when no lines match; with `set -e` we must not let that abort the script.
+  FROZEN_PRIOR_CHECKPOINTS_EXPORT=$(
+    (grep -v '^[[:space:]]*$' "$PRIOR_FILE" 2>/dev/null || true) | tr '\n' ',' | sed 's/,$//'
+  )
+}
+
 for ((iter=1; iter<=ITERATIONS; iter++)); do
+  rebuild_frozen_prior_csv
+  FROZEN_PRIOR_CSV="${FROZEN_PRIOR_CHECKPOINTS:-${FROZEN_PRIOR_CHECKPOINTS_EXPORT:-}}"
   echo "[scorenet] ===== iteration $iter / $ITERATIONS ====="
   RUN_DIR="$CHECKPOINT_ROOT/ppo_iter_$(printf '%03d' "$iter")"
   mkdir -p "$RUN_DIR"
@@ -103,7 +173,17 @@ for ((iter=1; iter<=ITERATIONS; iter++)); do
     SCORENET_DEVICE="${SCORENET_DEVICE:-mps}" \
     PROGRESS_EVERY_MATCHES="${PROGRESS_EVERY_MATCHES:-10}" \
     ROLLOUT_WORKER_ID="0" \
-    node "$EXPORT_PPO_BUNDLE" | tee "$SUMMARY_PATH"
+    ROLLOUT_REGIME="${ROLLOUT_REGIME:-heuristic}" \
+    FROZEN_POOL_CHECKPOINTS="${FROZEN_POOL_CHECKPOINTS:-}" \
+    FROZEN_PARTNER_PROB="${FROZEN_PARTNER_PROB:-0}" \
+    FROZEN_POOL_DEVICE="${FROZEN_POOL_DEVICE:-}" \
+    FROZEN_POOL_TEMPERATURE="${FROZEN_POOL_TEMPERATURE:-}" \
+    HYBRID_LEGACY_FRACTION="${HYBRID_LEGACY_FRACTION:-0.2}" \
+    FROZEN_PRIOR_PROB="${FROZEN_PRIOR_PROB:-0.2}" \
+    FROZEN_PRIOR_CHECKPOINTS="${FROZEN_PRIOR_CSV}" \
+    SELFPLAY_2V2_SYMMETRIC="${SELFPLAY_2V2_SYMMETRIC:-0}" \
+    TEMPERATURE="${TEMPERATURE:-0.9}" \
+    linebuf node "$EXPORT_PPO_BUNDLE" | tee "$SUMMARY_PATH"
   else
     SHARD_DIR="$RUN_DIR/rollout_shards"
     mkdir -p "$SHARD_DIR"
@@ -142,7 +222,17 @@ for ((iter=1; iter<=ITERATIONS; iter++)); do
         SCORENET_DEVICE="${SCORENET_DEVICE:-mps}" \
         PROGRESS_EVERY_MATCHES="${PROGRESS_EVERY_MATCHES:-10}" \
         ROLLOUT_WORKER_ID="$worker" \
-        node "$EXPORT_PPO_BUNDLE" > "$SHARD_SUMMARY"
+        ROLLOUT_REGIME="${ROLLOUT_REGIME:-heuristic}" \
+        FROZEN_POOL_CHECKPOINTS="${FROZEN_POOL_CHECKPOINTS:-}" \
+        FROZEN_PARTNER_PROB="${FROZEN_PARTNER_PROB:-0}" \
+        FROZEN_POOL_DEVICE="${FROZEN_POOL_DEVICE:-}" \
+        FROZEN_POOL_TEMPERATURE="${FROZEN_POOL_TEMPERATURE:-}" \
+        HYBRID_LEGACY_FRACTION="${HYBRID_LEGACY_FRACTION:-0.2}" \
+        FROZEN_PRIOR_PROB="${FROZEN_PRIOR_PROB:-0.2}" \
+        FROZEN_PRIOR_CHECKPOINTS="${FROZEN_PRIOR_CSV}" \
+        SELFPLAY_2V2_SYMMETRIC="${SELFPLAY_2V2_SYMMETRIC:-0}" \
+        TEMPERATURE="${TEMPERATURE:-0.9}" \
+        linebuf node "$EXPORT_PPO_BUNDLE" > "$SHARD_SUMMARY"
       ) &
       PIDS+=("$!")
     done
@@ -156,7 +246,7 @@ for ((iter=1; iter<=ITERATIONS; iter++)); do
       cat "$shard" >> "$ROLLOUT_PATH"
     done
 
-    "$PYTHON_BIN" - "$SUMMARY_PATH" "$ROLLOUT_PATH" "${SHARD_SUMMARIES[@]}" <<'PY'
+    linebuf "$PYTHON_BIN" - "$SUMMARY_PATH" "$ROLLOUT_PATH" "${SHARD_SUMMARIES[@]}" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -173,6 +263,8 @@ aggregate = {
     "averageTurnsPerMatch": 0.0,
     "temperature": None,
     "opponentProfile": None,
+    "regime": None,
+    "hybridSubCounts": None,
     "shards": [],
     "outputPath": str(rollout_path),
 }
@@ -189,8 +281,20 @@ for path in summary_files:
         aggregate["temperature"] = data.get("temperature")
     if aggregate["opponentProfile"] is None:
         aggregate["opponentProfile"] = data.get("opponentProfile")
+    if aggregate["regime"] is None:
+        aggregate["regime"] = data.get("regime")
+    sub = data.get("hybridSubCounts") or {}
+    if isinstance(sub, dict) and sub:
+        if aggregate["hybridSubCounts"] is None:
+            aggregate["hybridSubCounts"] = {}
+        for k, v in sub.items():
+            aggregate["hybridSubCounts"][k] = aggregate["hybridSubCounts"].get(k, 0) + int(v)
 if aggregate["matches"] > 0:
     aggregate["averageTurnsPerMatch"] = total_turns / aggregate["matches"]
+if not aggregate["hybridSubCounts"]:
+    del aggregate["hybridSubCounts"]
+if aggregate.get("regime") is None:
+    aggregate.pop("regime", None)
 summary_path.write_text(json.dumps(aggregate, indent=2) + "\n")
 print(json.dumps(aggregate, indent=2))
 PY
@@ -198,7 +302,7 @@ PY
 
   CURRENT_PPO_EPOCHS="$PPO_EPOCHS"
   if [[ "$PPO_EPOCHS_AUTO" == "1" ]]; then
-    CURRENT_PPO_EPOCHS="$("$PYTHON_BIN" - "$SUMMARY_PATH" "$PPO_TARGET_UPDATES" "$PPO_BATCH_SIZE" "$PPO_EPOCHS_MIN" "$PPO_EPOCHS_MAX" <<'PY'
+    CURRENT_PPO_EPOCHS="$(linebuf "$PYTHON_BIN" - "$SUMMARY_PATH" "$PPO_TARGET_UPDATES" "$PPO_BATCH_SIZE" "$PPO_EPOCHS_MIN" "$PPO_EPOCHS_MAX" <<'PY'
 import json
 import math
 import sys
@@ -221,7 +325,7 @@ PY
 
   echo "[scorenet] PPO training... (epochs=$CURRENT_PPO_EPOCHS, batch_size=$PPO_BATCH_SIZE, dataloader_workers=$PPO_DATALOADER_WORKERS)"
   PPO_DIR="$RUN_DIR/ppo"
-  "$PYTHON_BIN" training/scorenet/train_ppo.py \
+  linebuf "$PYTHON_BIN" training/scorenet/train_ppo.py \
     --rollout "$ROLLOUT_PATH" \
     --init-checkpoint "$CURRENT_CHECKPOINT" \
     --output-dir "$PPO_DIR" \
@@ -231,11 +335,22 @@ PY
     --learning-rate "${PPO_LEARNING_RATE:-1e-4}" \
     --clip-eps "${PPO_CLIP_EPS:-0.1}" \
     --target-kl "${PPO_TARGET_KL:-0.03}" \
+    --entropy-coef "${PPO_ENTROPY_COEF}" \
     --cpu-fraction "$CPU_FRACTION" \
     --mps-memory-fraction "$MPS_MEMORY_FRACTION"
 
   CURRENT_CHECKPOINT="$PPO_DIR/epoch_$(printf '%03d' "$CURRENT_PPO_EPOCHS").pt"
   echo "[scorenet] updated checkpoint: $CURRENT_CHECKPOINT"
+
+  if [[ "${SNAPSHOT_EVERY_ITERS:-0}" -gt 0 ]] && (( iter % SNAPSHOT_EVERY_ITERS == 0 )); then
+    snap_path="$SNAPSHOT_DIR/iter_$(printf '%03d' "$iter")_$(date +%Y%m%d_%H%M%S).pt"
+    cp "$CURRENT_CHECKPOINT" "$snap_path"
+    echo "$snap_path" >> "$PRIOR_FILE"
+    if [[ -n "$SNAPSHOT_MAX" && "$SNAPSHOT_MAX" -gt 0 ]]; then
+      tail -n "$SNAPSHOT_MAX" "$PRIOR_FILE" > "${PRIOR_FILE}.new" && mv "${PRIOR_FILE}.new" "$PRIOR_FILE"
+    fi
+    echo "[scorenet] snapshot: $snap_path (PRIOR_FILE capped at ${SNAPSHOT_MAX} entries)"
+  fi
 
   DO_EVAL=0
   IS_FULL_EVAL=0
@@ -272,7 +387,8 @@ PY
       CPU_FRACTION="$CPU_FRACTION" \
       MPS_MEMORY_FRACTION="$MPS_MEMORY_FRACTION" \
       SCORENET_DEVICE="${SCORENET_DEVICE:-mps}" \
-      node "$EVAL_BUNDLE" | tee "$RUN_DIR/eval_summary.json"
+      EVAL_DUPLICATE_DEALS="${EVAL_DUPLICATE_DEALS:-1}" \
+      linebuf node "$EVAL_BUNDLE" | tee "$RUN_DIR/eval_summary.json"
     else
       EVAL_SHARD_DIR="$RUN_DIR/eval_shards"
       mkdir -p "$EVAL_SHARD_DIR"
@@ -300,14 +416,15 @@ PY
           CPU_FRACTION="$CPU_FRACTION" \
           MPS_MEMORY_FRACTION="$MPS_MEMORY_FRACTION" \
           SCORENET_DEVICE="${SCORENET_DEVICE:-mps}" \
-          node "$EVAL_BUNDLE" > "$SHARD_SUMMARY"
+          EVAL_DUPLICATE_DEALS="${EVAL_DUPLICATE_DEALS:-1}" \
+          linebuf node "$EVAL_BUNDLE" > "$SHARD_SUMMARY"
         ) &
         EVAL_PIDS+=("$!")
       done
       for pid in "${EVAL_PIDS[@]}"; do
         wait "$pid"
       done
-      "$PYTHON_BIN" - "$RUN_DIR/eval_summary.json" "${EVAL_SUMMARIES[@]}" <<'PY'
+      linebuf "$PYTHON_BIN" - "$RUN_DIR/eval_summary.json" "${EVAL_SUMMARIES[@]}" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -366,8 +483,54 @@ print(json.dumps(aggregate, indent=2))
 PY
     fi
 
-    if [[ "$STOP_WHEN_BEAT" == "1" ]]; then
-      if "$PYTHON_BIN" - "$RUN_DIR/eval_summary.json" "$STOP_MIN_NET_DELTA" "$STOP_MIN_WIN_RATE" <<'PY'
+    STOP_TRAINING=0
+    if [[ "${STOP_STREAK:-0}" -gt 0 ]]; then
+      if linebuf "$PYTHON_BIN" - "$RUN_DIR/eval_summary.json" "$EVAL_STREAK_FILE" "$STOP_MIN_NET_DELTA" "$STOP_MIN_WIN_RATE" "$STOP_STREAK" "$iter" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+eval_path = Path(sys.argv[1])
+streak_path = Path(sys.argv[2])
+min_net = float(sys.argv[3])
+min_wr = float(sys.argv[4])
+required = int(sys.argv[5])
+iter_num = int(sys.argv[6])
+
+data = json.loads(eval_path.read_text())
+net = float(data.get("netLevelDeltaFromLearnedPerspective", 0))
+win_rate = float((data.get("learned") or {}).get("winRate", 0))
+ok = net >= min_net and win_rate > min_wr
+
+state = {"streak": 0, "lastIter": 0}
+if streak_path.exists():
+    state = json.loads(streak_path.read_text())
+
+if ok:
+    state["streak"] = int(state.get("streak", 0)) + 1
+else:
+    state["streak"] = 0
+state["lastIter"] = iter_num
+streak_path.write_text(json.dumps(state, indent=2) + "\n")
+
+if state["streak"] >= required:
+    print(
+        f"[scorenet] streak stop: {state['streak']}/{required} strong evals in a row "
+        f"(net={net:.3f} >= {min_net}, winRate={win_rate:.4f} > {min_wr})"
+    )
+    sys.exit(0)
+print(
+    f"[scorenet] eval streak {state['streak']}/{required}: net={net:.3f}, winRate={win_rate:.4f}"
+)
+sys.exit(1)
+PY
+      then
+        echo "[scorenet] early stopping after iteration $iter (streak met)."
+        STOP_TRAINING=1
+      fi
+    fi
+    if [[ "$STOP_TRAINING" -eq 0 && "$STOP_WHEN_BEAT" == "1" ]]; then
+      if linebuf "$PYTHON_BIN" - "$RUN_DIR/eval_summary.json" "$STOP_MIN_NET_DELTA" "$STOP_MIN_WIN_RATE" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -393,8 +556,11 @@ sys.exit(1)
 PY
       then
         echo "[scorenet] early stopping after iteration $iter (beat condition met)."
-        break
+        STOP_TRAINING=1
       fi
+    fi
+    if [[ "$STOP_TRAINING" -ne 0 ]]; then
+      break
     fi
   else
     echo "[scorenet] skipping eval this iteration (EVAL_EVERY=$EVAL_EVERY, FULL_EVAL_EVERY=$FULL_EVAL_EVERY)"

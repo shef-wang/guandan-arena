@@ -1,11 +1,22 @@
 # ScoreNet Training Pipeline
 
-This directory contains an attention-based training pipeline for Guandan:
+This directory contains an attention-based PPO training pipeline for the
+2v2 trick-taking card game Guandan. The end product is a single neural
+policy/value network that beats hand-crafted heuristic bots and continues
+to improve via self-play.
 
-- `legacy-v1` heuristic as baseline signal
-- learned policy/value model (`ScoreNet`)
-- imitation warm start
-- PPO self-play where learned team (seats 0/2) plays vs `legacy-v1` team (seats 1/3)
+Stack:
+
+- A small attention network (`ScoreNet`): state/action encoders + a
+  Transformer encoder + policy and value heads.
+- An imitation warm start from the `legacy-v1` heuristic.
+- PPO with GAE, with the learner controlling team-0 seats (0 and 2) by
+  default. Opponents are heuristic bots, frozen older ScoreNet
+  checkpoints, or a mix.
+- A **two-step** PPO curriculum: `legacy-v2.6` **then** `legacy-v3.0` (there is
+  **no** separate training milestone against `legacy-v2.7`). After that,
+  self-play vs a frozen ScoreNet pool, and a final **gauntlet** (eval-only)
+  that may include extra baselines such as `legacy-v2.7` for reporting.
 
 ## Files
 
@@ -16,8 +27,28 @@ This directory contains an attention-based training pipeline for Guandan:
 - `train_imitation.py`: supervised warm-start training
 - `export_ppo_rollouts.ts`: generate PPO rollouts with GAE
 - `train_ppo.py`: PPO update step
-- `evaluate.ts`: learned vs legacy evaluation
-- `selfplay_loop.sh`: end-to-end orchestration
+- `evaluate.ts`: learned vs legacy evaluation (with duplicate dealing)
+- `selfplay_loop.sh`: end-to-end orchestration of one milestone
+- `run_selfplay.sh`: wrapper that launches `selfplay_loop.sh` in self-play mode
+- `run_gauntlet.sh` + `aggregate_gauntlet.py`: final benchmark gauntlet vs all heuristic versions
+
+## Who is the learner?
+
+By default both team-0 seats (0 and 2) are controlled by the learner with
+**shared parameters** (a single `ScoreNet`). Both seats' transitions are
+appended to the rollout buffer and share the team's terminal return.
+
+Trade-off:
+
+- Pros: 2x transitions per game, the policy learns to coordinate with
+  itself (which matches deployment), seat is a feature so seat-conditional
+  behaviour is still possible.
+- Cons: same-game transitions are correlated, credit assignment between
+  the two teammates is loose.
+
+For the v3.0 milestone and beyond, a **frozen partner / opponent pool**
+(see "Self-play and frozen pool" below) reduces the credit-assignment
+issue without sacrificing the data-efficiency of shared self-play.
 
 ## Prerequisites
 
@@ -65,6 +96,15 @@ PPO_EPOCHS=4 \
 TRAIN_EPOCHS=8 \
 training/scorenet/selfplay_loop.sh
 ```
+
+**Logs (live updates):** With `TIMESTAMPED_LOGGING=1` (default), lines are written to
+`RUN_LOG_PATH` or `CHECKPOINT_ROOT/selfplay_<timestamp>.log`. Because Node and Python
+often **block-buffer** when stdout is a pipe, the script also appends a **heartbeat**
+every `LOG_HEARTBEAT_SECS` seconds (default **60**) directly to that file (same style as
+the old v1 training runs). Set `LOG_HEARTBEAT_SECS=0` to disable. Child processes are
+wrapped with `stdbuf -oL -eL` when available (install **GNU coreutils** on macOS via
+Homebrew and use `stdbuf`, or `gstdbuf` on `PATH`) and `PYTHONUNBUFFERED=1` is set so
+rollout/PPO lines **flush** into the timestamped stream more reliably.
 
 If you already have a warm-start checkpoint:
 
@@ -158,3 +198,170 @@ PPO sample:
   - Reduce `MATCHES`, `ITERATIONS`, and `EVAL_MATCHES` first.
 - Policy server JSON parse errors
   - Rebuild latest bundles; stale `/tmp/*.cjs` files can mismatch current Python code.
+
+## Curriculum
+
+The recommended PPO path is **two heuristic milestones**, then
+neural-neighbour training — **not** a ladder through every legacy version:
+
+```text
+legacy-v2.6  (PPO training opponent; first milestone)
+   -> legacy-v3.0  (PPO training opponent; second milestone, optional frozen partner pool)
+   -> self-play vs frozen ScoreNet pool (strongest signal when heuristics saturate)
+   -> gauntlet (eval only): e.g. legacy-v1, v2.6, v2.7, v3.0 — v2.7 is benchmark-only, not a training stage
+```
+
+`legacy-v2.7` is **not** used as a curriculum training opponent here; PPO
+goes **straight from the v2.6 milestone to training against v3.0** (the strong
+heuristic). You may still run `legacy-v2.7` in the **gauntlet** to measure
+how the policy sits between tiers.
+
+Each milestone reuses the previous milestone's final checkpoint via
+`INIT_CHECKPOINT`. Stop conditions:
+
+- v2.6 milestone: win rate > 0.65 over 40 duplicate-dealt eval matches.
+- v3.0 milestone: win rate > 0.45 over 40 duplicate-dealt eval matches.
+- Self-play: open-ended, periodically benchmarked vs `legacy-v3.0`.
+
+### v2.6 milestone
+
+```bash
+INIT_CHECKPOINT=path/to/imitation_or_prior.pt \
+OPPONENT_PROFILE=legacy-v2.6 \
+EVAL_MATCHES=40 \
+ROLLOUT_MATCHES=300 \
+TEMPERATURE=0.5 \
+STOP_MIN_WIN_RATE=0.65 \
+SCORENET_DEVICE=mps \
+training/scorenet/selfplay_loop.sh
+```
+
+When the loop stops, snapshot the winning checkpoint:
+
+```bash
+mkdir -p training/scorenet/checkpoints/milestones
+cp <winning epoch_NNN.pt> training/scorenet/checkpoints/milestones/v26_winner.pt
+```
+
+### v3.0 milestone (with frozen teammate pool)
+
+```bash
+INIT_CHECKPOINT=training/scorenet/checkpoints/milestones/v26_winner.pt \
+OPPONENT_PROFILE=legacy-v3.0 \
+ROLLOUT_REGIME=frozen_teammate \
+FROZEN_POOL_CHECKPOINTS=training/scorenet/checkpoints/milestones/v26_winner.pt \
+FROZEN_PARTNER_PROB=0.25 \
+EVAL_MATCHES=40 FULL_EVAL_MATCHES=100 \
+ROLLOUT_MATCHES=400 TEMPERATURE=0.5 \
+PPO_LEARNING_RATE=5e-5 \
+STOP_MIN_WIN_RATE=0.45 \
+SCORENET_DEVICE=mps \
+training/scorenet/selfplay_loop.sh
+```
+
+Snapshot to `milestones/v30_contender.pt` once the win-rate condition fires.
+
+### Self-play and frozen pool
+
+After v3.0 the heuristic ceiling stops being informative. Use
+`run_selfplay.sh`:
+
+```bash
+INIT_CHECKPOINT=training/scorenet/checkpoints/milestones/v30_contender.pt \
+FROZEN_POOL_DIR=training/scorenet/checkpoints/milestones \
+training/scorenet/run_selfplay.sh
+```
+
+`run_selfplay.sh` defaults to `ROLLOUT_REGIME=selfplay_mixed`, which draws
+each match's seat layout 50/50 from:
+
+- `selfplay_2v2`: learner on seats 0 and 2, frozen pool on seats 1 and 3
+  (cheap, 2x transitions per match, both learner seats train).
+- `selfplay_solo`: learner on seat 0 only, frozen pool on seats 1, 2, 3
+  (cleanest credit assignment, half the data).
+
+Eval continues to run vs the configured `OPPONENT_PROFILE` (default
+`legacy-v3.0`) so progress remains comparable to the curriculum
+milestones.
+
+#### Rollout regimes (`ROLLOUT_REGIME` env)
+
+| Regime | Seat 0 | Seat 1 | Seat 2 | Seat 3 | Use |
+|---|---|---|---|---|---|
+| `heuristic` (default) | learner | heuristic | learner | heuristic | vs heuristic baseline |
+| `frozen_teammate` | learner | heuristic | learner or frozen | heuristic | v3.0 phase |
+| `selfplay_2v2` | learner | frozen | learner | frozen | self-play, 2x data |
+| `selfplay_solo` | learner | frozen | frozen | frozen | self-play, clean credit |
+| `selfplay_mixed` | per-match 50/50 of `selfplay_2v2` and `selfplay_solo` | | | | self-play default |
+
+Required env when any regime uses `frozen`:
+
+- `FROZEN_POOL_CHECKPOINTS`: comma-separated list of `.pt` paths.
+- Optional `FROZEN_PARTNER_PROB`: probability of replacing seat 2 with a
+  frozen checkpoint in `frozen_teammate` mode (default 0).
+- Optional `FROZEN_POOL_TEMPERATURE`: sampling temperature for the frozen
+  pool (default = `TEMPERATURE`).
+
+When a seat is `frozen`, transitions on that seat are **not** appended to
+the PPO rollout buffer. Only learner-seat transitions are kept, which
+keeps the gradient clean.
+
+### Eval (duplicate dealing)
+
+`evaluate.ts` defaults to `EVAL_DUPLICATE_DEALS=1`, which plays each base
+seed twice with the learner's team flipped. This roughly halves variance
+from card luck. Set `EVAL_DUPLICATE_DEALS=0` to recover the older
+unpaired behaviour. ScoreNet runs greedy at eval time
+(`sample: false`).
+
+### Final gauntlet
+
+After self-play, run the gauntlet to benchmark vs every heuristic
+version:
+
+```bash
+CHECKPOINT=path/to/final.pt \
+MATCHES=200 \
+training/scorenet/run_gauntlet.sh
+```
+
+Output:
+
+- `training/scorenet/reports/gauntlet_<timestamp>/<opponent>.json` per opponent.
+- `training/scorenet/reports/gauntlet_<timestamp>/README.md` with win rates and 95% Wilson CIs.
+
+## Hardware
+
+The pipeline runs on CPU but is dramatically faster on GPU. Use
+`SCORENET_DEVICE=mps` on Apple Silicon (validated; Metal Performance
+Shaders) or `SCORENET_DEVICE=cuda` on NVIDIA GPUs. The default is
+auto-detection in `pick_device` (`runtime_utils.py`).
+
+Rollout generation and evaluation are parallelised across processes via
+`ROLLOUT_WORKERS` and `EVAL_WORKERS` (default 8 each); each worker spawns
+its own `serve_policy.py` subprocess.
+
+## Reproducing a milestone from scratch
+
+1. Generate imitation data and warm-start checkpoint (one-off):
+
+   ```bash
+   training/scorenet/selfplay_loop.sh # with no INIT_CHECKPOINT
+   ```
+
+   This will export imitation data, train an imitation checkpoint, then
+   start PPO. Stop after one or two iterations.
+
+2. Run the v2.6 milestone (see "Curriculum" above), snapshot the
+   winning checkpoint to `milestones/v26_winner.pt`.
+
+3. Run the v3.0 milestone, snapshot to `milestones/v30_contender.pt`.
+
+4. Run self-play with `run_selfplay.sh`.
+
+5. Run the gauntlet with `run_gauntlet.sh`.
+
+All runs are deterministic given fixed `BASE_SEED`, hardware, and the
+order of rollout workers. Win-rate noise dominates anything else
+in this regime, so prefer larger `MATCHES` over fixing the seed when
+comparing checkpoints.

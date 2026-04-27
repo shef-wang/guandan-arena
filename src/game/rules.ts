@@ -836,6 +836,718 @@ function getWildCount(cards: Card[]): number {
   return cards.filter((card) => card.isWild).length;
 }
 
+export interface AutoArrangeBudget {
+  fourBomb: number;
+  fiveBomb: number;
+  straightFlush: number;
+}
+
+// Marginal hand-cost we're willing to pay to keep a special play.
+// Example: fourBomb=2 means "accept a 4-bomb only if it makes the partition at most 2 hands longer".
+// Joker-bomb and 6+ bombs are always taken (treated as effectively infinite credit).
+export const AUTO_ARRANGE_BUDGET: AutoArrangeBudget = {
+  fourBomb: 2,
+  fiveBomb: 2,
+  straightFlush: 3,
+};
+
+const ALWAYS_TAKE_BONUS = 1_000;
+const DEFAULT_TIME_LIMIT_MS = 1_500;
+const DEFAULT_NODE_LIMIT = 1_000_000;
+const MAX_BITMASK_CARDS = 30;
+
+interface PartitionCost {
+  score: number;
+  wilds: number;
+  primarySum: number;
+}
+
+export interface PartitionResult {
+  groups: string[][];
+  plays: Play[];
+  cost: PartitionCost;
+  fallbackUsed: boolean;
+  nodeCount: number;
+  elapsedMs: number;
+}
+
+interface FindBestPartitionOptions {
+  budget?: AutoArrangeBudget;
+  timeLimitMs?: number;
+  nodeLimit?: number;
+}
+
+function playCostScore(play: Play, budget: AutoArrangeBudget): number {
+  if (play.type === 'joker-bomb') {
+    return 1 - ALWAYS_TAKE_BONUS;
+  }
+  if (play.type === 'bomb') {
+    const size = play.bombSize ?? 4;
+    if (size >= 6) {
+      return 1 - ALWAYS_TAKE_BONUS;
+    }
+    if (size === 5) {
+      return 1 - budget.fiveBomb;
+    }
+    return 1 - budget.fourBomb;
+  }
+  if (play.type === 'straight-flush') {
+    return 1 - budget.straightFlush;
+  }
+  return 1;
+}
+
+function playToCost(play: Play, budget: AutoArrangeBudget): PartitionCost {
+  return {
+    score: playCostScore(play, budget),
+    wilds: play.wildCount,
+    primarySum: play.primaryValue,
+  };
+}
+
+function zeroCost(): PartitionCost {
+  return { score: 0, wilds: 0, primarySum: 0 };
+}
+
+function addCost(left: PartitionCost, right: PartitionCost): PartitionCost {
+  return {
+    score: left.score + right.score,
+    wilds: left.wilds + right.wilds,
+    primarySum: left.primarySum + right.primarySum,
+  };
+}
+
+function compareCost(left: PartitionCost, right: PartitionCost): number {
+  if (left.score !== right.score) {
+    return left.score - right.score;
+  }
+  if (left.wilds !== right.wilds) {
+    return left.wilds - right.wilds;
+  }
+  // Prefer partitions that retain higher-value cards in fewer plays.
+  return right.primarySum - left.primarySum;
+}
+
+interface SearchEntry {
+  cost: PartitionCost;
+  plays: Play[];
+}
+
+interface IndexedPlay {
+  play: Play;
+  mask: number;
+  costScore: number;
+  costWilds: number;
+  costPrimary: number;
+}
+
+function combinations<T>(items: T[], pick: number, callback: (subset: T[]) => void): void {
+  if (pick === 0) {
+    callback([]);
+    return;
+  }
+  if (pick > items.length) {
+    return;
+  }
+  const indices = Array.from({ length: pick }, (_, i) => i);
+  while (true) {
+    callback(indices.map((i) => items[i]));
+    let cursor = pick - 1;
+    while (cursor >= 0 && indices[cursor] === items.length - pick + cursor) {
+      cursor -= 1;
+    }
+    if (cursor < 0) {
+      break;
+    }
+    indices[cursor] += 1;
+    for (let j = cursor + 1; j < pick; j += 1) {
+      indices[j] = indices[j - 1] + 1;
+    }
+  }
+}
+
+function enumerateRankCombos(
+  actuals: Card[],
+  wilds: Card[],
+  count: number,
+  callback: (cards: Card[], wildCount: number) => void,
+): void {
+  const maxWilds = Math.min(count, wilds.length);
+  for (let w = 0; w <= maxWilds; w += 1) {
+    const a = count - w;
+    if (a < 0 || a > actuals.length) {
+      continue;
+    }
+    combinations(actuals, a, (actualSubset) => {
+      combinations(wilds, w, (wildSubset) => {
+        callback([...actualSubset, ...wildSubset], w);
+      });
+    });
+  }
+}
+
+function enumerateRankCombosWithWildIds(
+  actuals: Card[],
+  wilds: Card[],
+  count: number,
+  callback: (cards: Card[], wildIds: Set<string>) => void,
+): void {
+  const maxWilds = Math.min(count, wilds.length);
+  for (let w = 0; w <= maxWilds; w += 1) {
+    const a = count - w;
+    if (a < 0 || a > actuals.length) {
+      continue;
+    }
+    combinations(actuals, a, (actualSubset) => {
+      combinations(wilds, w, (wildSubset) => {
+        const wildIds = new Set<string>();
+        for (const card of wildSubset) {
+          wildIds.add(card.id);
+        }
+        callback([...actualSubset, ...wildSubset], wildIds);
+      });
+    });
+  }
+}
+
+interface SequenceSlotChoice {
+  cards: Card[];
+  wildIds: Set<string>;
+}
+
+function enumerateSequenceFillings(
+  window: number[],
+  multiplicity: number,
+  cardsByRank: Map<Rank, Card[]>,
+  wilds: Card[],
+  suit: Suit | null,
+  callback: (cardsPerSlot: Card[][]) => void,
+): void {
+  const slotCount = window.length;
+  const ranksForSlots = window.map((value) => valueToRank(value));
+
+  const filled: Card[][] = [];
+  const usedWildIds = new Set<string>();
+
+  function backtrack(slot: number): void {
+    if (slot === slotCount) {
+      callback(filled.map((arr) => [...arr]));
+      return;
+    }
+
+    const rank = ranksForSlots[slot];
+    const actuals = (cardsByRank.get(rank) ?? []).filter(
+      (card) => !suit || card.suit === suit,
+    );
+    const availableWilds = wilds.filter((card) => !usedWildIds.has(card.id));
+
+    enumerateRankCombosWithWildIds(actuals, availableWilds, multiplicity, (cards, wildIds) => {
+      filled.push(cards);
+      for (const id of wildIds) {
+        usedWildIds.add(id);
+      }
+      backtrack(slot + 1);
+      filled.pop();
+      for (const id of wildIds) {
+        usedWildIds.delete(id);
+      }
+    });
+  }
+
+  backtrack(0);
+}
+
+// Fully enumerate every legal concrete play in the hand without dedup. Each
+// returned play references concrete Card objects (not abstract templates).
+function enumerateConcretePlays(cards: Card[]): Play[] {
+  const sorted = [...cards].sort((left, right) => left.id.localeCompare(right.id));
+  const wilds = sorted.filter((card) => card.isWild);
+  const cardsByRank = new Map<Rank, Card[]>();
+  for (const card of sorted) {
+    if (card.isWild) {
+      continue;
+    }
+    const list = cardsByRank.get(card.rank) ?? [];
+    list.push(card);
+    cardsByRank.set(card.rank, list);
+  }
+
+  const plays: Play[] = [];
+
+  for (const card of sorted) {
+    plays.push(
+      createPlay('single', [card], RANK_POWER[getSingleRank(card)], {
+        primaryRank: getSingleRank(card),
+      }),
+    );
+  }
+
+  for (const rank of ALL_RANKS) {
+    const actuals = cardsByRank.get(rank) ?? [];
+    if (isJokerRank(rank)) {
+      for (let i = 0; i < actuals.length; i += 1) {
+        for (let j = i + 1; j < actuals.length; j += 1) {
+          plays.push(
+            createPlay('pair', [actuals[i], actuals[j]], RANK_POWER[rank], { primaryRank: rank }),
+          );
+        }
+      }
+      continue;
+    }
+
+    enumerateRankCombos(actuals, wilds, 2, (combo, wildCount) => {
+      if (wildCount === 2 && rank !== 'A') {
+        return;
+      }
+      plays.push(createPlay('pair', combo, RANK_POWER[rank], { primaryRank: rank }));
+    });
+
+    enumerateRankCombos(actuals, wilds, 3, (combo, wildCount) => {
+      if (wildCount === 3) {
+        return;
+      }
+      plays.push(createPlay('triple', combo, RANK_POWER[rank], { primaryRank: rank }));
+    });
+
+    for (let size = 4; size <= 8; size += 1) {
+      enumerateRankCombos(actuals, wilds, size, (combo, wildCount) => {
+        if (wildCount === size) {
+          return;
+        }
+        plays.push(
+          createPlay('bomb', combo, RANK_POWER[rank], {
+            bombSize: size,
+            primaryRank: rank,
+          }),
+        );
+      });
+    }
+  }
+
+  const sjs = cardsByRank.get('SJ') ?? [];
+  const bjs = cardsByRank.get('BJ') ?? [];
+  if (sjs.length >= 2 && bjs.length >= 2) {
+    combinations(sjs, 2, (sjSubset) => {
+      combinations(bjs, 2, (bjSubset) => {
+        plays.push(
+          createPlay('joker-bomb', [...sjSubset, ...bjSubset], SPECIAL_TYPE_ORDER, {}),
+        );
+      });
+    });
+  }
+
+  for (const tripleRank of NORMAL_RANKS) {
+    const tripleActuals = cardsByRank.get(tripleRank) ?? [];
+    if (tripleActuals.length === 0 && wilds.length < 1) {
+      continue;
+    }
+    for (const pairRank of ALL_RANKS) {
+      if (pairRank === tripleRank) {
+        continue;
+      }
+      const pairActuals = cardsByRank.get(pairRank) ?? [];
+      if (isJokerRank(pairRank) && pairActuals.length < 2) {
+        continue;
+      }
+
+      enumerateRankCombosWithWildIds(tripleActuals, wilds, 3, (tripleCards, tripleWildIds) => {
+        if (tripleWildIds.size === 3) {
+          return;
+        }
+        const remainingWilds = wilds.filter((card) => !tripleWildIds.has(card.id));
+        if (isJokerRank(pairRank)) {
+          for (let i = 0; i < pairActuals.length; i += 1) {
+            for (let j = i + 1; j < pairActuals.length; j += 1) {
+              plays.push(
+                createPlay(
+                  'full-house',
+                  [...tripleCards, pairActuals[i], pairActuals[j]],
+                  RANK_POWER[tripleRank],
+                  { primaryRank: tripleRank },
+                ),
+              );
+            }
+          }
+          return;
+        }
+        enumerateRankCombos(pairActuals, remainingWilds, 2, (pairCards, pairWildCount) => {
+          if (pairWildCount === 2 && pairRank !== 'A') {
+            return;
+          }
+          plays.push(
+            createPlay(
+              'full-house',
+              [...tripleCards, ...pairCards],
+              RANK_POWER[tripleRank],
+              { primaryRank: tripleRank },
+            ),
+          );
+        });
+      });
+    }
+  }
+
+  // Sequences
+  const sequenceConfigs: { windows: number[][]; multiplicity: number; type: Play['type'] }[] = [
+    { windows: STRAIGHT_WINDOWS, multiplicity: 1, type: 'straight' },
+    { windows: PAIR_RUN_WINDOWS, multiplicity: 2, type: 'pair-run' },
+    { windows: TRIPLE_RUN_WINDOWS, multiplicity: 3, type: 'triple-run' },
+  ];
+  for (const config of sequenceConfigs) {
+    for (const window of config.windows) {
+      enumerateSequenceFillings(window, config.multiplicity, cardsByRank, wilds, null, (slotCards) => {
+        const flat = slotCards.flat();
+        plays.push(
+          createPlay(config.type, flat, window[window.length - 1], {
+            sequence: window,
+          }),
+        );
+      });
+    }
+  }
+
+  for (const suit of ['clubs', 'diamonds', 'hearts', 'spades'] as const) {
+    for (const window of STRAIGHT_WINDOWS) {
+      enumerateSequenceFillings(window, 1, cardsByRank, wilds, suit, (slotCards) => {
+        const flat = slotCards.flat();
+        plays.push(
+          createPlay('straight-flush', flat, window[window.length - 1], {
+            sequence: window,
+            suit,
+          }),
+        );
+      });
+    }
+  }
+
+  return plays;
+}
+
+export function findBestPartition(cards: Card[], options: FindBestPartitionOptions = {}): PartitionResult {
+  const start = Date.now();
+  const budget = options.budget ?? AUTO_ARRANGE_BUDGET;
+  const timeLimitMs = options.timeLimitMs ?? DEFAULT_TIME_LIMIT_MS;
+  const nodeLimit = options.nodeLimit ?? DEFAULT_NODE_LIMIT;
+
+  if (cards.length === 0) {
+    return {
+      groups: [],
+      plays: [],
+      cost: zeroCost(),
+      fallbackUsed: false,
+      nodeCount: 0,
+      elapsedMs: 0,
+    };
+  }
+
+  if (cards.length > MAX_BITMASK_CARDS) {
+    const groups = autoArrangeHandGreedy(cards);
+    return {
+      groups,
+      plays: [],
+      cost: zeroCost(),
+      fallbackUsed: true,
+      nodeCount: 0,
+      elapsedMs: Date.now() - start,
+    };
+  }
+
+  const sortedIds = [...cards].map((card) => card.id).sort((left, right) => left.localeCompare(right));
+  const indexById = new Map<string, number>();
+  sortedIds.forEach((id, index) => indexById.set(id, index));
+
+  const fullMask = sortedIds.length === 32 ? -1 : ((1 << sortedIds.length) - 1) | 0;
+
+  // Precompute every concrete play once and bucket by its lowest-id card so
+  // each search node only iterates plays that could anchor on the current
+  // lowest available card.
+  const allPlays = enumerateConcretePlays(cards);
+  const playsByAnchor: IndexedPlay[][] = sortedIds.map(() => []);
+  for (const play of allPlays) {
+    let mask = 0;
+    let lowestIdx = sortedIds.length;
+    let valid = true;
+    for (const card of play.cards) {
+      const idx = indexById.get(card.id);
+      if (idx === undefined) {
+        valid = false;
+        break;
+      }
+      mask |= 1 << idx;
+      if (idx < lowestIdx) {
+        lowestIdx = idx;
+      }
+    }
+    if (!valid) {
+      continue;
+    }
+    const indexed: IndexedPlay = {
+      play,
+      mask,
+      costScore: playCostScore(play, budget),
+      costWilds: play.wildCount,
+      costPrimary: play.primaryValue,
+    };
+    playsByAnchor[lowestIdx].push(indexed);
+  }
+
+  // Order each anchor's candidates so cheaper plays are tried first; within
+  // equal cost prefer fewer wilds and higher primary value (better tiebreaks).
+  for (const list of playsByAnchor) {
+    list.sort((left, right) => {
+      if (left.costScore !== right.costScore) {
+        return left.costScore - right.costScore;
+      }
+      if (left.costWilds !== right.costWilds) {
+        return left.costWilds - right.costWilds;
+      }
+      return right.costPrimary - left.costPrimary;
+    });
+  }
+
+  // Precompute an admissible lower bound on the cost achievable from any
+  // subset: every card must be covered, the cheapest play type covers up to
+  // 8 cards (8-bomb), and the maximum special credit available across the
+  // full hand is an upper bound on credits available in any subset.
+  let maxCreditAvailable = 0;
+  for (const indexed of allPlays.map((play) => ({ play, score: playCostScore(play, budget) }))) {
+    if (indexed.score < 1) {
+      maxCreditAvailable += 1 - indexed.score;
+    }
+  }
+
+  const memo = new Map<number, SearchEntry | null>();
+  let nodeCount = 0;
+  let timedOut = false;
+  // Track the best complete partition (root → empty) seen so far, so that on
+  // timeout we return a full partition rather than collapsing to the legacy
+  // specials-first greedy.
+  let bestComplete: SearchEntry | null = null;
+
+  function popcount(mask: number): number {
+    let value = mask;
+    value = value - ((value >>> 1) & 0x55555555);
+    value = (value & 0x33333333) + ((value >>> 2) & 0x33333333);
+    value = (value + (value >>> 4)) & 0x0f0f0f0f;
+    return ((value * 0x01010101) >>> 24) & 0x3f;
+  }
+
+  function lowerBoundCost(mask: number): number {
+    if (mask === 0) {
+      return 0;
+    }
+    // ceil(remaining / 8) regular plays - all possible credit -> lower bound.
+    const remaining = popcount(mask);
+    const minPlays = Math.ceil(remaining / 8);
+    return minPlays - maxCreditAvailable;
+  }
+
+  function lowestSetBitIndex(mask: number): number {
+    if (mask === 0) {
+      return -1;
+    }
+    let index = 0;
+    let cursor = mask & -mask;
+    while ((cursor & 1) === 0) {
+      cursor >>>= 1;
+      index += 1;
+    }
+    return index;
+  }
+
+  function search(mask: number): SearchEntry | null {
+    if (mask === 0) {
+      return { cost: zeroCost(), plays: [] };
+    }
+
+    if (memo.has(mask)) {
+      return memo.get(mask) ?? null;
+    }
+
+    if (timedOut) {
+      return null;
+    }
+
+    nodeCount += 1;
+    if (nodeCount > nodeLimit || Date.now() - start > timeLimitMs) {
+      timedOut = true;
+      return null;
+    }
+
+    const anchorIndex = lowestSetBitIndex(mask);
+    const candidates = playsByAnchor[anchorIndex];
+
+    let best: SearchEntry | null = null;
+
+    for (const indexed of candidates) {
+      if ((indexed.mask & mask) !== indexed.mask) {
+        continue;
+      }
+      // Branch & bound: skip plays that cannot improve over the current best.
+      if (best) {
+        const remainingMask = mask & ~indexed.mask;
+        const remainingLB = lowerBoundCost(remainingMask);
+        if (indexed.costScore + remainingLB >= best.cost.score) {
+          continue;
+        }
+      }
+      const sub = search(mask & ~indexed.mask);
+      if (sub === null) {
+        if (timedOut) {
+          // Bubble up partial best if any: at the root, the caller will use
+          // bestComplete; at intermediate masks, return null to cancel.
+          break;
+        }
+        continue;
+      }
+
+      const totalCost = addCost(
+        {
+          score: indexed.costScore,
+          wilds: indexed.costWilds,
+          primarySum: indexed.costPrimary,
+        },
+        sub.cost,
+      );
+
+      if (!best || compareCost(totalCost, best.cost) < 0) {
+        best = {
+          cost: totalCost,
+          plays: [indexed.play, ...sub.plays],
+        };
+        if (mask === fullMask) {
+          bestComplete = best;
+        }
+      }
+    }
+
+    if (!timedOut) {
+      memo.set(mask, best);
+    }
+    return best;
+  }
+
+  const result = search(fullMask);
+  const elapsedMs = Date.now() - start;
+
+  // On timeout, prefer any partial root-level partition we found over the
+  // legacy specials-first greedy.
+  const finalResult = result ?? bestComplete;
+
+  if (!finalResult) {
+    const groups = autoArrangeHandGreedy(cards);
+    return {
+      groups,
+      plays: [],
+      cost: zeroCost(),
+      fallbackUsed: true,
+      nodeCount,
+      elapsedMs,
+    };
+  }
+
+  const groups = finalResult.plays
+    .filter((play) => play.cards.length >= 2)
+    .map((play) => play.cards.map((card) => card.id));
+
+  return {
+    groups,
+    plays: finalResult.plays,
+    cost: finalResult.cost,
+    fallbackUsed: timedOut,
+    nodeCount,
+    elapsedMs,
+  };
+}
+
+export function autoArrangeHand(cards: Card[]): string[][] {
+  if (cards.length < 2) {
+    return [];
+  }
+
+  return findBestPartition(cards).groups;
+}
+
+// Greedy "specials-first" partition kept as a deterministic fallback when the
+// search-based partition runs out of time / node budget.
+function autoArrangeHandGreedy(cards: Card[]): string[][] {
+  if (cards.length < 2) {
+    return [];
+  }
+
+  const candidates = generateAllPlays(cards)
+    .filter((play) => play.cards.length >= 2)
+    .sort((left, right) => {
+      const gap = scoreAutoArrangePlay(right) - scoreAutoArrangePlay(left);
+      if (gap !== 0) {
+        return gap;
+      }
+      const leftKey = left.cards.map((card) => card.id).join('|');
+      const rightKey = right.cards.map((card) => card.id).join('|');
+      return leftKey.localeCompare(rightKey);
+    });
+
+  const claimed = new Set<string>();
+  const groups: string[][] = [];
+
+  for (const play of candidates) {
+    if (play.cards.some((card) => claimed.has(card.id))) {
+      continue;
+    }
+
+    for (const card of play.cards) {
+      claimed.add(card.id);
+    }
+
+    groups.push(play.cards.map((card) => card.id));
+  }
+
+  return groups;
+}
+
+function scoreAutoArrangePlay(play: Play): number {
+  const wildPenalty = play.wildCount * 100;
+  const primaryBonus = play.primaryValue * 10;
+
+  if (play.type === 'joker-bomb') {
+    return 10_000_000;
+  }
+
+  if (play.type === 'straight-flush') {
+    return 9_000_000 + primaryBonus - wildPenalty;
+  }
+
+  if (play.type === 'bomb') {
+    return 8_000_000 + (play.bombSize ?? 4) * 10_000 + primaryBonus - wildPenalty;
+  }
+
+  if (play.type === 'triple-run') {
+    return 5_000_000 + play.size * 1_000 + primaryBonus - wildPenalty;
+  }
+
+  if (play.type === 'pair-run') {
+    return 4_000_000 + play.size * 1_000 + primaryBonus - wildPenalty;
+  }
+
+  if (play.type === 'straight') {
+    return 3_000_000 + primaryBonus - wildPenalty;
+  }
+
+  if (play.type === 'full-house') {
+    return 2_000_000 + primaryBonus - wildPenalty;
+  }
+
+  if (play.type === 'triple') {
+    return 1_000_000 + primaryBonus - wildPenalty;
+  }
+
+  if (play.type === 'pair') {
+    return 500_000 + primaryBonus - wildPenalty;
+  }
+
+  return 0;
+}
+
 export function usesRankPotentialBomb(hand: Card[], play: Play): boolean {
   if (isSpecialPlay(play)) {
     return false;

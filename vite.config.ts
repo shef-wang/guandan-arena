@@ -2,7 +2,7 @@ import react from '@vitejs/plugin-react';
 import { execFileSync, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { createInterface } from 'node:readline';
-import { dirname, join, relative, resolve } from 'node:path';
+import { basename, dirname, join, relative, resolve } from 'node:path';
 import { defineConfig, type ViteDevServer } from 'vite';
 
 interface PendingPolicyRequest {
@@ -205,7 +205,7 @@ function findLatestScoreNetCheckpoint(): string | null {
         continue;
       }
 
-      if (!/^epoch_\d+\.pt$/.test(entry.name) || dirname(fullPath).split('/').at(-1) !== 'ppo') {
+      if (!/^epoch_\d+\.pt$/.test(entry.name) || basename(dirname(fullPath)) !== 'ppo') {
         continue;
       }
 
@@ -231,9 +231,11 @@ function compareCheckpoints(
   b: { mtimeMs: number; iteration: number; epoch: number; isSmoke: boolean },
 ): number {
   if (a.isSmoke !== b.isSmoke) return a.isSmoke ? -1 : 1;
+  // Prefer newest checkpoint on disk: continued runs append epochs and bump mtime,
+  // so this tracks the active training line rather than an older high-ppo_iter tree.
+  if (a.mtimeMs !== b.mtimeMs) return a.mtimeMs - b.mtimeMs;
   if (a.iteration !== b.iteration) return a.iteration - b.iteration;
-  if (a.epoch !== b.epoch) return a.epoch - b.epoch;
-  return a.mtimeMs - b.mtimeMs;
+  return a.epoch - b.epoch;
 }
 
 async function readJsonBody(req: import('node:http').IncomingMessage): Promise<Record<string, unknown>> {

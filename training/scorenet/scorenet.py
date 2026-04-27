@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import warnings
 
 import torch
 from torch import Tensor, nn
@@ -44,7 +45,13 @@ class ScoreNet(nn.Module):
             batch_first=True,
             norm_first=True,
         )
-        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                message=".*enable_nested_tensor is True.*",
+                category=UserWarning,
+            )
+            self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
 
         self.policy_head = nn.Linear(d_model, 1)
         self.value_head = nn.Sequential(

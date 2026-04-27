@@ -125,6 +125,7 @@ async function main(): Promise<void> {
   const cpuFraction = Number(process.env.CPU_FRACTION ?? '1.0');
   const mpsMemoryFraction = Number(process.env.MPS_MEMORY_FRACTION ?? '0.95');
   const scoreNetDevice = process.env.SCORENET_DEVICE ?? null;
+  const duplicateDeals = (process.env.EVAL_DUPLICATE_DEALS ?? '1') !== '0';
 
   if (!checkpoint) {
     throw new Error('CHECKPOINT is required.');
@@ -138,8 +139,12 @@ async function main(): Promise<void> {
 
   try {
     for (let matchIndex = 0; matchIndex < matches; matchIndex += 1) {
-      const learnedTeam = (matchIndex % 2 === 0 ? 0 : 1) as 0 | 1;
-      const random = createSeededRandom(baseSeed + matchIndex);
+      const pairIndex = duplicateDeals ? Math.floor(matchIndex / 2) : matchIndex;
+      const phase = duplicateDeals ? matchIndex % 2 : 0;
+      const learnedTeam = (
+        duplicateDeals ? (phase === 0 ? 0 : 1) : matchIndex % 2 === 0 ? 0 : 1
+      ) as 0 | 1;
+      const random = createSeededRandom(baseSeed + pairIndex);
       const learnedAgent = buildLearnedAgent(client);
       const match = new GuandanArenaMatch({
         initialState: createNewGame(random),
@@ -183,6 +188,7 @@ async function main(): Promise<void> {
         baseSeed,
         checkpoint,
         opponentProfile,
+        duplicateDeals,
         learnedLevelGainTotal: learnedLevelGain,
         legacyLevelGainTotal: legacyLevelGain,
         netLevelDeltaFromLearnedPerspective: learnedLevelGain - legacyLevelGain,

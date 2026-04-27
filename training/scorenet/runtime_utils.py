@@ -58,7 +58,7 @@ def pick_device(preferred: str | None = None) -> torch.device:
 
 def read_command_output(command: list[str]) -> str | None:
     try:
-        return subprocess.check_output(command, text=True).strip()
+        return subprocess.check_output(command, text=True, stderr=subprocess.DEVNULL).strip()
     except Exception:
         return None
 

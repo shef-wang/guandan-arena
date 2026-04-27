@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { chooseAiAction } from './game/ai';
-import { enumerateExactPlays, filterLegalPlays, getPlayDisplayRank, sortPlayOptionsForContext } from './game/rules';
+import { autoArrangeHand, enumerateExactPlays, filterLegalPlays, getPlayDisplayRank, sortPlayOptionsForContext } from './game/rules';
 import { applyPass, applyPlay, createNewGame, getSeatStatus } from './game/state';
 import type { Card, GameState, PlayerState, Suit } from './game/types';
 import GameTableScene from './table/GameTableScene';
@@ -376,18 +376,27 @@ export default function PracticeTable() {
   }
 
   const humanTurn = game.currentPlayer === 0 && game.winnerTeam === null;
+  const gameLive = game.winnerTeam === null;
   const canPass = humanTurn && game.tablePlay !== null;
   const canPlay = humanTurn && chosenPlay !== null;
-  const canOrganize = humanTurn && selectedIds.length >= 2 && selectedOrganizedGroup === null;
-  const canRestoreSelected = humanTurn && selectedOrganizedGroup !== null;
-  const canRestoreAll = humanTurn && selectedIds.length === 0 && normalizedOrganizedGroups.length > 0;
+  const canOrganize = gameLive && selectedIds.length >= 2 && selectedOrganizedGroup === null;
+  const canRestoreSelected = gameLive && selectedOrganizedGroup !== null;
+  const canRestoreAll = gameLive && selectedIds.length === 0 && normalizedOrganizedGroups.length > 0;
   const canRestore = canRestoreSelected || canRestoreAll;
   const showOrganizeAction = canOrganize;
   const showRestoreAction = !showOrganizeAction && canRestore;
   const organizeButtonLabel = showOrganizeAction ? '理牌' : '恢复';
+  const arrangedPlayCount = useMemo(() => {
+    if (normalizedOrganizedGroups.length === 0) {
+      return 0;
+    }
+    const claimed = new Set(normalizedOrganizedGroups.flat());
+    const singles = human.hand.filter((card) => !claimed.has(card.id)).length;
+    return normalizedOrganizedGroups.length + singles;
+  }, [normalizedOrganizedGroups, human.hand]);
 
   function handleToggleCard(card: Card, group?: Card[], indexInGroup?: number): void {
-    if (!humanTurn) {
+    if (!gameLive) {
       return;
     }
 
@@ -479,6 +488,16 @@ export default function PracticeTable() {
     setOrganizedGroups([]);
   }
 
+  function handleAutoArrange(): void {
+    if (!gameLive) {
+      return;
+    }
+
+    setOrganizedGroups(autoArrangeHand(human.hand));
+    setSelectedIds([]);
+    setSelectedOptionIndex(0);
+  }
+
   if (!gameStarted) {
     return (
       <PracticeSetupScreen
@@ -549,9 +568,20 @@ export default function PracticeTable() {
               >
                 {organizeButtonLabel}
               </button>
-              <button className="arrange-button one-click" data-keep-selection="true" disabled type="button">
+              <button
+                className="arrange-button one-click"
+                data-keep-selection="true"
+                disabled={!gameLive}
+                onClick={handleAutoArrange}
+                type="button"
+              >
                 一键理牌
               </button>
+              {arrangedPlayCount > 0 ? (
+                <span className="arrange-count" aria-live="polite">
+                  理出 {arrangedPlayCount} 手
+                </span>
+              ) : null}
             </div>
           </div>
 
