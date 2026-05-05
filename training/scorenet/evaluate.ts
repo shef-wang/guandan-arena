@@ -116,6 +116,12 @@ class PythonPolicyClient {
   }
 }
 
+/** Signed level swing for the learned team (+levelDelta if learned wins, −if opponent wins). */
+function signedLevelForLearned(finalState: { result: { winnerTeam: 0 | 1; levelDelta: number } }, learnedTeam: 0 | 1): number {
+  const { winnerTeam, levelDelta } = finalState.result;
+  return winnerTeam === learnedTeam ? levelDelta : -levelDelta;
+}
+
 async function main(): Promise<void> {
   const matches = Number(process.env.MATCHES ?? '100');
   const baseSeed = Number(process.env.BASE_SEED ?? '20260416');
@@ -126,9 +132,18 @@ async function main(): Promise<void> {
   const mpsMemoryFraction = Number(process.env.MPS_MEMORY_FRACTION ?? '0.95');
   const scoreNetDevice = process.env.SCORENET_DEVICE ?? null;
   const duplicateDeals = (process.env.EVAL_DUPLICATE_DEALS ?? '1') !== '0';
+  const evalMetric = (process.env.EVAL_METRIC ?? 'per_game').toLowerCase();
+  const pairLevelMode = evalMetric === 'pair_level';
 
   if (!checkpoint) {
     throw new Error('CHECKPOINT is required.');
+  }
+
+  if (pairLevelMode && !duplicateDeals) {
+    throw new Error('EVAL_METRIC=pair_level requires mirrored deals (EVAL_DUPLICATE_DEALS=1).');
+  }
+  if (pairLevelMode && matches % 2 !== 0) {
+    throw new Error(`EVAL_METRIC=pair_level requires an even MATCHES count (got ${matches}).`);
   }
 
   const client = new PythonPolicyClient(pythonBin, checkpoint, cpuFraction, mpsMemoryFraction, scoreNetDevice);
@@ -136,78 +151,147 @@ async function main(): Promise<void> {
   let legacyWins = 0;
   let learnedLevelGain = 0;
   let legacyLevelGain = 0;
+  let signedNetLevelFromLearned = 0;
+  let pairWins = 0;
+  let pairNetLevelSum = 0;
+  const pairCount = pairLevelMode ? matches / 2 : 0;
 
   try {
-    for (let matchIndex = 0; matchIndex < matches; matchIndex += 1) {
-      const pairIndex = duplicateDeals ? Math.floor(matchIndex / 2) : matchIndex;
-      const phase = duplicateDeals ? matchIndex % 2 : 0;
-      const learnedTeam = (
-        duplicateDeals ? (phase === 0 ? 0 : 1) : matchIndex % 2 === 0 ? 0 : 1
-      ) as 0 | 1;
-      const random = createSeededRandom(baseSeed + pairIndex);
-      const learnedAgent = buildLearnedAgent(client);
-      const match = new GuandanArenaMatch({
-        initialState: createNewGame(random),
-        agents:
-          learnedTeam === 0
-            ? [
-                learnedAgent,
-                createHeuristicAgent({ profile: opponentProfile, label: 'Opponent 1' }),
-                learnedAgent,
-                createHeuristicAgent({ profile: opponentProfile, label: 'Opponent 3' }),
-              ]
-            : [
-                createHeuristicAgent({ profile: opponentProfile, label: 'Opponent 0' }),
-                learnedAgent,
-                createHeuristicAgent({ profile: opponentProfile, label: 'Opponent 2' }),
-                learnedAgent,
-              ],
-      });
+    if (!pairLevelMode) {
+      for (let matchIndex = 0; matchIndex < matches; matchIndex += 1) {
+        const pairIndex = duplicateDeals ? Math.floor(matchIndex / 2) : matchIndex;
+        const phase = duplicateDeals ? matchIndex % 2 : 0;
+        const learnedTeam = (
+          duplicateDeals ? (phase === 0 ? 0 : 1) : matchIndex % 2 === 0 ? 0 : 1
+        ) as 0 | 1;
+        const random = createSeededRandom(baseSeed + pairIndex);
+        const learnedAgent = buildLearnedAgent(client);
+        const match = new GuandanArenaMatch({
+          initialState: createNewGame(random),
+          agents:
+            learnedTeam === 0
+              ? [
+                  learnedAgent,
+                  createHeuristicAgent({ profile: opponentProfile, label: 'Opponent 1' }),
+                  learnedAgent,
+                  createHeuristicAgent({ profile: opponentProfile, label: 'Opponent 3' }),
+                ]
+              : [
+                  createHeuristicAgent({ profile: opponentProfile, label: 'Opponent 0' }),
+                  learnedAgent,
+                  createHeuristicAgent({ profile: opponentProfile, label: 'Opponent 2' }),
+                  learnedAgent,
+                ],
+        });
 
-      const finalState = await match.runUntilFinished({ maxTurns: 500 });
-      if (!finalState.result) {
-        throw new Error(`Match ${matchIndex + 1} ended without a result.`);
+        const finalState = await match.runUntilFinished({ maxTurns: 500 });
+        if (!finalState.result) {
+          throw new Error(`Match ${matchIndex + 1} ended without a result.`);
+        }
+
+        signedNetLevelFromLearned += signedLevelForLearned(finalState, learnedTeam);
+
+        if (finalState.result.winnerTeam === learnedTeam) {
+          learnedWins += 1;
+          learnedLevelGain += finalState.result.levelDelta;
+        } else {
+          legacyWins += 1;
+          legacyLevelGain += finalState.result.levelDelta;
+        }
       }
+    } else {
+      for (let pairIndex = 0; pairIndex < pairCount; pairIndex += 1) {
+        let pairSigned = 0;
+        for (let phase = 0; phase < 2; phase += 1) {
+          const learnedTeam = (phase === 0 ? 0 : 1) as 0 | 1;
+          const random = createSeededRandom(baseSeed + pairIndex);
+          const learnedAgent = buildLearnedAgent(client);
+          const match = new GuandanArenaMatch({
+            initialState: createNewGame(random),
+            agents:
+              learnedTeam === 0
+                ? [
+                    learnedAgent,
+                    createHeuristicAgent({ profile: opponentProfile, label: 'Opponent 1' }),
+                    learnedAgent,
+                    createHeuristicAgent({ profile: opponentProfile, label: 'Opponent 3' }),
+                  ]
+                : [
+                    createHeuristicAgent({ profile: opponentProfile, label: 'Opponent 0' }),
+                    learnedAgent,
+                    createHeuristicAgent({ profile: opponentProfile, label: 'Opponent 2' }),
+                    learnedAgent,
+                  ],
+          });
 
-      if (finalState.result.winnerTeam === learnedTeam) {
-        learnedWins += 1;
-        learnedLevelGain += finalState.result.levelDelta;
-      } else {
-        legacyWins += 1;
-        legacyLevelGain += finalState.result.levelDelta;
+          const finalState = await match.runUntilFinished({ maxTurns: 500 });
+          if (!finalState.result) {
+            throw new Error(`Pair ${pairIndex + 1} phase ${phase} ended without a result.`);
+          }
+
+          const s = signedLevelForLearned(finalState, learnedTeam);
+          pairSigned += s;
+          signedNetLevelFromLearned += s;
+
+          if (finalState.result.winnerTeam === learnedTeam) {
+            learnedWins += 1;
+            learnedLevelGain += finalState.result.levelDelta;
+          } else {
+            legacyWins += 1;
+            legacyLevelGain += finalState.result.levelDelta;
+          }
+        }
+        pairNetLevelSum += pairSigned;
+        if (pairSigned > 0) {
+          pairWins += 1;
+        }
       }
     }
   } finally {
     await client.close();
   }
 
-  console.log(
-    JSON.stringify(
-      {
-        matches,
-        baseSeed,
-        checkpoint,
-        opponentProfile,
-        duplicateDeals,
-        learnedLevelGainTotal: learnedLevelGain,
-        legacyLevelGainTotal: legacyLevelGain,
-        netLevelDeltaFromLearnedPerspective: learnedLevelGain - legacyLevelGain,
-        netLevelDeltaPerMatch: matches > 0 ? (learnedLevelGain - legacyLevelGain) / matches : 0,
-        learned: {
-          wins: learnedWins,
-          winRate: learnedWins / matches,
-          averageLevelGainOnWins: learnedWins > 0 ? learnedLevelGain / learnedWins : 0,
-        },
-        legacy: {
-          wins: legacyWins,
-          winRate: legacyWins / matches,
-          averageLevelGainOnWins: legacyWins > 0 ? legacyLevelGain / legacyWins : 0,
-        },
-      },
-      null,
-      2,
-    ),
-  );
+  const pairMirror =
+    pairLevelMode && pairCount > 0
+      ? {
+          pairs: pairCount,
+          pairWins,
+          pairWinRate: pairWins / pairCount,
+          netLevelDeltaTotalAcrossPairs: pairNetLevelSum,
+          netLevelDeltaPerPair: pairNetLevelSum / pairCount,
+        }
+      : undefined;
+
+  const summary: Record<string, unknown> = {
+    matches,
+    baseSeed,
+    checkpoint,
+    opponentProfile,
+    duplicateDeals,
+    evalMetric: pairLevelMode ? 'pair_level' : 'per_game',
+    learnedLevelGainTotal: learnedLevelGain,
+    legacyLevelGainTotal: legacyLevelGain,
+    netLevelDeltaFromLearnedPerspective: learnedLevelGain - legacyLevelGain,
+    netLevelDeltaPerMatch: matches > 0 ? (learnedLevelGain - legacyLevelGain) / matches : 0,
+    signedNetLevelFromLearned,
+    signedNetLevelPerGame: matches > 0 ? signedNetLevelFromLearned / matches : 0,
+    learned: {
+      wins: learnedWins,
+      winRate: learnedWins / matches,
+      averageLevelGainOnWins: learnedWins > 0 ? learnedLevelGain / learnedWins : 0,
+    },
+    legacy: {
+      wins: legacyWins,
+      winRate: legacyWins / matches,
+      averageLevelGainOnWins: legacyWins > 0 ? legacyLevelGain / legacyWins : 0,
+    },
+  };
+
+  if (pairMirror) {
+    summary.pairMirror = pairMirror;
+  }
+
+  console.log(JSON.stringify(summary, null, 2));
 }
 
 function buildLearnedAgent(client: PythonPolicyClient): GuandanArenaAgent {
@@ -216,7 +300,8 @@ function buildLearnedAgent(client: PythonPolicyClient): GuandanArenaAgent {
     label: 'ScoreNet',
     async decideTurn(input, context): Promise<ArenaChosenAction> {
       const chosenIndex = await client.chooseActionIndex(input, context.state, context.seat);
-      const chosen = input.legalActions[Math.max(0, Math.min(chosenIndex, input.legalActions.length - 1))] ?? input.legalActions[0];
+      const chosen =
+        input.legalActions[Math.max(0, Math.min(chosenIndex, input.legalActions.length - 1))] ?? input.legalActions[0];
       if (!chosen) {
         throw new Error('No legal actions available for learned agent.');
       }

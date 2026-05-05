@@ -186,7 +186,7 @@ function pickFrozen(pool: string[], rng: () => number): string {
 
 /**
  * Rollout env (export_ppo_rollouts / selfplay_loop):
- * - ROLLOUT_REGIME=hybrid_selfplay_legacy: per match, HYBRID_LEGACY_FRACTION (default 0.2) vs legacy-v3.0
+ * - ROLLOUT_REGIME=hybrid_selfplay_legacy: per match, HYBRID_LEGACY_FRACTION (env; ~0.1 anchor / ~0.9 self-play) vs legacy-v3.0
  *   (OPPONENT_PROFILE); else symmetric selfplay 2v2. Mirror opponents use CHECKPOINT; with probability
  *   FROZEN_PRIOR_PROB (default 0.2) and non-empty FROZEN_PRIOR_CHECKPOINTS, both frozen seats use one prior snapshot.
  * - SELFPLAY_2V2_SYMMETRIC=1: for selfplay_2v2, same checkpoint for seats 1 and 3 (one draw from FROZEN_POOL_CHECKPOINTS).
@@ -284,7 +284,7 @@ async function main(): Promise<void> {
   const checkpoint = process.env.CHECKPOINT;
   const outputPath = process.env.OUTPUT_PATH ?? 'training/scorenet/data/selfplay_ppo_rollout.jsonl';
   const pythonBin = process.env.PYTHON_BIN ?? '.venv-danzero/bin/python';
-  const temperature = Number(process.env.TEMPERATURE ?? '0.9');
+  const temperature = Number(process.env.TEMPERATURE ?? '1.0');
   const cpuFraction = Number(process.env.CPU_FRACTION ?? '0.8');
   const mpsMemoryFraction = Number(process.env.MPS_MEMORY_FRACTION ?? '0.8');
   const scoreNetDevice = process.env.SCORENET_DEVICE ?? null;
