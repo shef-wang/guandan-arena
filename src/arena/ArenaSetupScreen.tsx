@@ -29,7 +29,7 @@ const SEAT_STRATEGY_OPTIONS: SeatStrategyOption[] = [
     label: 'Latest PPO ScoreNet',
     mode: 'scorenet-ppo',
     model: '',
-    note: '本地 PPO ScoreNet learned policy，通过 /api/scorenet/choose 调用。',
+    note: '在浏览器中运行 PPO ScoreNet (ONNX, ~1.3 MB)，本地或 Vercel 都可用。',
     usesRemoteModel: false,
   },
   {

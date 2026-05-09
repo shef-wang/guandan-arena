@@ -23,11 +23,11 @@ The "play against an LLM" and "watch LLM vs zero-style RL vs rule-based" compari
 | Heuristic bots (legacy-v1, legacy-v3)         | yes              | yes                             |
 | Chat-LLMs via OpenRouter (you supply the key) | yes              | yes                             |
 | 4-AI arena with mix-and-match seats           | yes              | yes                             |
-| ScoreNet PPO policy in the browser            | no — see note    | yes                             |
+| ScoreNet PPO policy in the browser            | yes (ONNX)       | yes (ONNX)                      |
 | Multiplayer (humans vs humans)                | no               | yes (with `npm run server:dev`) |
 
 
-The PPO model is served by a local Python process (`training/scorenet/serve_policy.py`) bridged through the Vite dev server. Vercel hosts the static frontend only, so the live demo cannot serve the learned policy. Running locally is the way to play against the PPO model today.
+The PPO model is exported to ONNX (`public/scorenet/scorenet.onnx`, ~1.3 MB) and runs on `onnxruntime-web`, so the same learned policy plays in the static Vercel build as well as locally — no Python server needed at runtime. The bundled checkpoint is `training/scorenet/checkpoints/stability_v3_20260503_180902/ppo_iter_080/ppo/epoch_010.pt`; rerun `python training/scorenet/export_onnx.py` after training to refresh it.
 
 ## Prior art and acknowledgements
 
@@ -54,7 +54,8 @@ A four-seat arena that supports mixing different agent types in the same match, 
 
 - `src/arena/spectatorConfig.ts`, `src/arena/spectatorMatch.ts`, `src/arena/ArenaSpectator.tsx`
 - `src/arena/openrouter.ts` — chat-LLM seat agents
-- `src/arena/scoreNetSeatAgent.ts` — PPO policy seat agent (local-only)
+- `src/arena/scoreNetSeatAgent.ts` — PPO policy seat agent (in-browser via ONNX)
+- `src/arena/scoreNetBrowserSession.ts` — lazy ONNX session loader for the browser
 - `src/arena/runHeadlessMatch.ts`, `src/arena/runBuiltinTournament.ts` — CLI tournament runners
 
 ### Heuristic agent ladder
@@ -69,7 +70,8 @@ A small attention-based policy and value network, trained with imitation warm-st
 
 - `training/scorenet/scorenet.py`, `training/scorenet/train_imitation.py`, `training/scorenet/train_ppo.py`
 - `training/scorenet/run_selfplay.sh`, `training/scorenet/selfplay_loop.sh`
-- `training/scorenet/serve_policy.py` — local inference server bridged via Vite
+- `training/scorenet/serve_policy.py` — stdin/stdout inference server used by the headless evaluation/benchmark CLIs
+- `training/scorenet/export_onnx.py` — exports the production PyTorch checkpoint to `public/scorenet/scorenet.onnx` for browser inference, with a torch ↔ onnxruntime parity check
 - `training/scorenet/checkpoints/stability_v3_20260503_180902/ppo_iter_080/ppo/epoch_010.pt` — the production checkpoint, tracked in the repo so it's reproducible
 
 ### Multiplayer server
@@ -86,22 +88,22 @@ The methodology bet — using a hand-built heuristic curriculum as a PPO teacher
 
 ## Running locally
 
-You need Node 18+ and (for the PPO model) Python 3.11+ with PyTorch on Apple Silicon or another MPS/CUDA target.
+You need Node 18+ to run and play. Python (3.11+ with PyTorch) is only needed if you want to retrain or re-export the PPO model.
 
 ```bash
 npm install
 npm run dev
 ```
 
-For the PPO policy server, set up the Python env once:
+That's it — the PPO model loads in the browser via ONNX. To re-export the model after training, set up the Python env once:
 
 ```bash
 python -m venv .venv-danzero
 source .venv-danzero/bin/activate
 pip install -r training/scorenet/requirements.txt
+pip install onnx onnxruntime onnxscript
+python training/scorenet/export_onnx.py
 ```
-
-`npm run dev` will then auto-spawn `serve_policy.py` the first time the browser hits `/api/scorenet/choose`.
 
 To play against chat-LLMs, supply an OpenRouter API key in the Practice or Arena setup screen. You can also drop the key into `apikey/key` (gitignored) and it will be picked up automatically in dev.
 
@@ -121,7 +123,6 @@ npm run arena:headless
 
 - **An LLM-vs-LLM Guandan leaderboard.** The most novel piece in this repo is the ability to seat several chat-LLMs at the same table. The natural next step is a public leaderboard with cost-per-game, latency, and head-to-head win rates across DeepSeek, Qwen, Kimi, GPT, Claude, Gemma, and others. The question I most want to answer: do Chinese-trained LLMs play this Chinese cultural game better than Western ones? Funding the inference is the open problem.
 - **Continue training the PPO model** to see how far the heuristic-curriculum approach can be pushed.
-- **Make the Vercel deployment more useful** — at minimum, default the in-browser Practice mode to a working agent, and explore lightweight inference options for shipping a small learned policy to the static site.
 
 ## Contributing and contact
 

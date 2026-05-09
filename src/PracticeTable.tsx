@@ -7,6 +7,7 @@ import GameTableScene from './table/GameTableScene';
 import { PlayingCard, formatPlacementKey } from './ui/tableWidgets';
 import { applyArenaChosenAction, buildArenaTurnInput } from './arena/engine';
 import { createOpenRouterAgent } from './arena/openrouter';
+import { getScoreNetSession, scoreNetChooseIndex } from './arena/scoreNetBrowserSession';
 import type { ArenaChosenAction } from './arena/types';
 import { buildHeuristicContext, encodeTurnForPolicy } from '../training/scorenet/feature_codec';
 
@@ -15,12 +16,6 @@ type PracticeAiMode = 'legacy' | 'openrouter' | 'ppo';
 interface ScoreNetStatus {
   available: boolean;
   checkpoint: string | null;
-  error?: string;
-}
-
-interface ScoreNetChoiceResponse {
-  chosen_index?: number;
-  checkpoint?: string;
   error?: string;
 }
 
@@ -61,7 +56,7 @@ export default function PracticeTable() {
     available: false,
     checkpoint: null,
   });
-  const [scoreNetStatusText, setScoreNetStatusText] = useState('Checking latest PPO checkpoint...');
+  const [scoreNetStatusText, setScoreNetStatusText] = useState('Loading PPO ScoreNet (~1.3 MB)...');
   const legacyWorkerRef = useRef<Worker | null>(null);
   const legacyWorkerPendingRef = useRef(
     new Map<number, { resolve: (decision: ReturnType<typeof chooseAiAction>) => void; reject: (error: Error) => void }>(),
@@ -151,7 +146,25 @@ export default function PracticeTable() {
   }, [openRouterApiKey]);
 
   useEffect(() => {
-    void refreshScoreNetStatus();
+    let cancelled = false;
+    (async () => {
+      try {
+        const { meta } = await getScoreNetSession();
+        if (cancelled) return;
+        const label = meta.checkpoint_label ?? meta.checkpoint ?? 'PPO ScoreNet';
+        setScoreNetStatus({ available: true, checkpoint: label });
+        setScoreNetStatusText(`Ready: ${formatCheckpointLabel(label)}`);
+      } catch (error) {
+        if (cancelled) return;
+        setScoreNetStatus({ available: false, checkpoint: null });
+        setScoreNetStatusText(
+          `Unavailable: ${error instanceof Error ? error.message : 'PPO model failed to load'}`,
+        );
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const hasOpenRouterKey = openRouterApiKey.trim().length > 0;
@@ -251,24 +264,6 @@ export default function PracticeTable() {
     });
   }
 
-  async function refreshScoreNetStatus(): Promise<void> {
-    try {
-      const response = await fetch('/api/scorenet/status');
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
-      }
-
-      const status = (await response.json()) as ScoreNetStatus;
-      setScoreNetStatus(status);
-      setScoreNetStatusText(
-        status.available && status.checkpoint ? `Ready: ${formatCheckpointLabel(status.checkpoint)}` : 'No PPO checkpoint found.',
-      );
-    } catch (error) {
-      setScoreNetStatus({ available: false, checkpoint: null });
-      setScoreNetStatusText(`Unavailable: ${error instanceof Error ? error.message : 'ScoreNet endpoint failed'}`);
-    }
-  }
-
   async function loadLocalOpenRouterKey(existingKey: string): Promise<void> {
     if (existingKey.trim()) {
       return;
@@ -321,21 +316,9 @@ export default function PracticeTable() {
         const input = buildArenaTurnInput(game, actingSeat);
         const heuristic = buildHeuristicContext(game, actingSeat);
         const encoded = encodeTurnForPolicy(input, heuristic);
-        const response = await fetch('/api/scorenet/choose', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({
-            checkpoint: scoreNetStatus.checkpoint,
-            stateFeatures: encoded.stateFeatures,
-            actionFeatures: encoded.actionFeatures,
-          }),
-        });
-        const choice = (await response.json()) as ScoreNetChoiceResponse;
-        if (!response.ok || choice.error) {
-          throw new Error(choice.error ?? `HTTP ${response.status}`);
-        }
+        const choice = await scoreNetChooseIndex(encoded.stateFeatures, encoded.actionFeatures);
 
-        const chosenIndex = Math.max(0, Math.min(choice.chosen_index ?? 0, input.legalActions.length - 1));
+        const chosenIndex = Math.max(0, Math.min(choice.chosen_index, input.legalActions.length - 1));
         const chosen = input.legalActions[chosenIndex] ?? input.legalActions[0];
         if (!chosen) {
           throw new Error('PPO returned no legal action.');
@@ -349,7 +332,7 @@ export default function PracticeTable() {
 
           return applyArenaChosenAction(current, actingSeat, action);
         });
-        setLlmStatus(`ppo: ${formatCheckpointLabel(choice.checkpoint ?? scoreNetStatus.checkpoint ?? '')}`);
+        setLlmStatus(`ppo: ${formatCheckpointLabel(choice.checkpoint_label)}`);
         return;
       } catch (error) {
         const message = error instanceof Error ? error.message : 'ScoreNet request failed';
@@ -771,7 +754,7 @@ function PracticeSetupScreen({
             onClick={() => onAiModeChange('ppo')}
             type="button"
           >
-            <span className="start-mode-kicker">Local PPO</span>
+            <span className="start-mode-kicker">In-browser PPO</span>
             <strong>Latest ScoreNet PPO</strong>
             <p>{scoreNetStatusText}</p>
           </button>

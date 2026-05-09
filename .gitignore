@@ -39,3 +39,6 @@ tools/*.cjs
 tools/*.mjs
 .vercel
 .env*.local
+
+# Copied at build time from node_modules/onnxruntime-web/dist/ by vite.config.ts.
+public/ort/

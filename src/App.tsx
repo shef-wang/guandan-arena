@@ -69,7 +69,7 @@ export default function App() {
           <div className="app-title-group">
             <span className="eyebrow">Guandan Practice</span>
             <h1>1 Player vs 3 AI</h1>
-            <p className="app-subtitle">Choose built-in, DeepSeek, or the latest local PPO opponent.</p>
+            <p className="app-subtitle">Choose built-in, DeepSeek, or the latest in-browser PPO opponent.</p>
           </div>
           <div className="app-nav-row">
             <a className="ghost-button app-nav-link" href="/" onClick={(e) => { e.preventDefault(); navigate('/'); }}>

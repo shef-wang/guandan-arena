@@ -1,0 +1,12 @@
+{
+  "state_dim": 85,
+  "action_dim": 65,
+  "max_actions": 200,
+  "d_model": 128,
+  "nhead": 4,
+  "num_layers": 2,
+  "ff_dim": 256,
+  "checkpoint": "training/scorenet/checkpoints/stability_v3_20260503_180902/ppo_iter_080/ppo/epoch_010.pt",
+  "checkpoint_label": "stability_v3_20260503_180902/ppo_iter_080/ppo/epoch_010.pt",
+  "onnx_path": "/scorenet/scorenet.onnx"
+}

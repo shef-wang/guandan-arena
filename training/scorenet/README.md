@@ -26,7 +26,12 @@ Core training stack:
 - `scorenet.py`: attention policy-value network
 - `codec_config.py` + `codec_constants.json`: shared encoding constants for Python
 - `runtime_utils.py`: device picker, seed helpers used across the Python scripts
-- `serve_policy.py`: stdin/stdout inference server for TS runners
+- `serve_policy.py`: stdin/stdout inference server used by the headless
+  `evaluate.ts` / `bench_move_latency.ts` runners (the browser does its own
+  ONNX inference; see `export_onnx.py`)
+- `export_onnx.py`: export a `.pt` checkpoint to `public/scorenet/scorenet.onnx`
+  + `meta.json`, with a torch ↔ onnxruntime parity check. The exported file is
+  what the Practice/Spectator UIs load via `onnxruntime-web`.
 - `export_imitation_dataset.ts`: export legacy-v1 demonstration data
 - `train_imitation.py`: supervised warm-start training
 - `export_ppo_rollouts.ts`: generate PPO rollouts with GAE
@@ -55,8 +60,11 @@ Reference docs and bundled artifacts:
   checkpoints.
 - `checkpoints/stability_v3_20260503_180902/ppo_iter_080/ppo/epoch_010.pt`:
   the production ScoreNet checkpoint that ships with the repo. This is the
-  weights file used by `serve_policy.py` and the Practice / Spectator UIs
-  (`scorenet-ppo` mode). Everything else under `checkpoints/` is gitignored.
+  weights file `export_onnx.py` reads to produce the bundled
+  `public/scorenet/scorenet.onnx` used by the Practice / Spectator UIs
+  (`scorenet-ppo` mode), and what the headless `serve_policy.py` falls back to
+  when no `--checkpoint` is supplied. Everything else under `checkpoints/` is
+  gitignored.
 
 ## Who is the learner?
 
