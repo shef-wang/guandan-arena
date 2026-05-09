@@ -2,23 +2,16 @@ import { useEffect, useState } from 'react';
 import type { Seat } from '../game/types';
 import type { SpectatorArenaConfig, SpectatorGlobalConfig, SpectatorSeatConfig, SpectatorSeatConfigMap, SeatAgentMode } from './spectatorConfig';
 import { getSeatTitle, persistSpectatorConfig, validateSpectatorConfig } from './spectatorConfig';
-import { OPENROUTER_DEFAULT_RERANKER_MODEL } from './openrouter';
 
 const DEEPSEEK_V3_MODEL = 'deepseek/deepseek-chat-v3-0324';
-const KIMI_K25_MODEL = 'moonshotai/kimi-k2.5';
 const KIMI_K26_MODEL = 'moonshotai/kimi-k2.6';
 const GEMMA_4_MODEL = 'google/gemma-4-26b-a4b-it';
-const TENCENT_HY3_MODEL = 'tencent/hy3-preview:free';
 
 type SeatStrategyId =
-  | 'legacy-v1'
+  | 'scorenet-ppo'
   | 'legacy-v3'
-  | 'legacy-vR'
-  | 'llmreranker-deepseek'
   | 'deepseek-v3'
-  | 'kimi-k2.5'
   | 'kimi-k2.6'
-  | 'hy3-preview'
   | 'gemma-4-26b';
 
 interface SeatStrategyOption {
@@ -32,36 +25,20 @@ interface SeatStrategyOption {
 
 const SEAT_STRATEGY_OPTIONS: SeatStrategyOption[] = [
   {
-    id: 'legacy-v1',
-    label: 'guandan-ai v1 legacy',
-    mode: 'builtin-legacy-v1',
+    id: 'scorenet-ppo',
+    label: 'Latest PPO ScoreNet',
+    mode: 'scorenet-ppo',
     model: '',
-    note: '本地 heuristic，不请求外部模型。',
-    usesRemoteModel: false,
-  },
-  {
-    id: 'legacy-vR',
-    label: 'guandan-ai vR',
-    mode: 'builtin-legacy-vR',
-    model: '',
-    note: '基于 legacy-v1 的 top-5 加权抽样，保留一定变化但可复现。',
+    note: '本地 PPO ScoreNet learned policy，通过 /api/scorenet/choose 调用。',
     usesRemoteModel: false,
   },
   {
     id: 'legacy-v3',
-    label: 'guandan-ai v3.0',
+    label: 'legacy v3',
     mode: 'builtin-legacy-v3',
     model: '',
     note: '本地 legacy-v3.0 policy ensemble，不请求外部模型。',
     usesRemoteModel: false,
-  },
-  {
-    id: 'llmreranker-deepseek',
-    label: 'LLM Reranker · DeepSeek Chat V3 0324',
-    mode: 'llmreranker',
-    model: OPENROUTER_DEFAULT_RERANKER_MODEL,
-    note: '先用 legacy-v1 产生候选，再用 DeepSeek V3 做重排。',
-    usesRemoteModel: true,
   },
   {
     id: 'deepseek-v3',
@@ -72,27 +49,11 @@ const SEAT_STRATEGY_OPTIONS: SeatStrategyOption[] = [
     usesRemoteModel: true,
   },
   {
-    id: 'kimi-k2.5',
-    label: 'Kimi K2.5',
-    mode: 'openrouter',
-    model: KIMI_K25_MODEL,
-    note: '直接用 Kimi K2.5 出牌。',
-    usesRemoteModel: true,
-  },
-  {
     id: 'kimi-k2.6',
     label: 'Kimi K2.6',
     mode: 'openrouter',
     model: KIMI_K26_MODEL,
     note: '通过 OpenRouter 默认路由调用 Kimi K2.6；已使用 JSON 模式和更长超时。',
-    usesRemoteModel: true,
-  },
-  {
-    id: 'hy3-preview',
-    label: 'Tencent HY3 Preview (free)',
-    mode: 'openrouter',
-    model: TENCENT_HY3_MODEL,
-    note: '通过 OpenRouter 直接调用 Tencent HY3 Preview free 模型出牌。',
     usesRemoteModel: true,
   },
   {
@@ -306,23 +267,11 @@ function seatName(seat: Seat): string {
 }
 
 function getSelectedSeatStrategyId(config: SpectatorSeatConfig): SeatStrategyId {
-  if (config.mode === 'llmreranker') {
-    return 'llmreranker-deepseek';
-  }
-
-  if (config.mode === 'builtin-legacy-vR') {
-    return 'legacy-vR';
-  }
-
-  if (config.mode === 'builtin-legacy-v3') {
-    return 'legacy-v3';
+  if (config.mode === 'scorenet-ppo') {
+    return 'scorenet-ppo';
   }
 
   if (config.mode === 'openrouter') {
-    if (config.model === KIMI_K25_MODEL) {
-      return 'kimi-k2.5';
-    }
-
     if (config.model === KIMI_K26_MODEL) {
       return 'kimi-k2.6';
     }
@@ -331,14 +280,10 @@ function getSelectedSeatStrategyId(config: SpectatorSeatConfig): SeatStrategyId 
       return 'gemma-4-26b';
     }
 
-    if (config.model === TENCENT_HY3_MODEL) {
-      return 'hy3-preview';
-    }
-
     return 'deepseek-v3';
   }
 
-  return 'legacy-v1';
+  return 'legacy-v3';
 }
 
 function getSeatStrategyOption(id: SeatStrategyId): SeatStrategyOption {

@@ -52,7 +52,7 @@ export default function PracticeTable() {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [selectedOptionIndex, setSelectedOptionIndex] = useState(0);
   const [organizedGroups, setOrganizedGroups] = useState<string[][]>([]);
-  const [aiMode, setAiMode] = useState<PracticeAiMode>('legacy');
+  const [aiMode, setAiMode] = useState<PracticeAiMode>('ppo');
   const [openRouterApiKey, setOpenRouterApiKey] = useState('');
   const [llmStatus, setLlmStatus] = useState('未启用');
   const [localKeySource, setLocalKeySource] = useState<string | null>(null);
@@ -506,7 +506,6 @@ export default function PracticeTable() {
         hasOpenRouterKey={hasOpenRouterKey}
         onAiModeChange={setAiMode}
         onOpenRouterApiKeyChange={setOpenRouterApiKey}
-        onRefreshScoreNet={refreshScoreNetStatus}
         onStart={handleStartGame}
         openRouterApiKey={openRouterApiKey}
         scoreNetStatus={scoreNetStatus}
@@ -725,7 +724,6 @@ function PracticeSetupScreen({
   hasOpenRouterKey,
   onAiModeChange,
   onOpenRouterApiKeyChange,
-  onRefreshScoreNet,
   onStart,
   openRouterApiKey,
   scoreNetStatus,
@@ -736,7 +734,6 @@ function PracticeSetupScreen({
   hasOpenRouterKey: boolean;
   onAiModeChange: (mode: PracticeAiMode) => void;
   onOpenRouterApiKeyChange: (value: string) => void;
-  onRefreshScoreNet: () => void;
   onStart: () => void;
   openRouterApiKey: string;
   scoreNetStatus: ScoreNetStatus;
@@ -800,15 +797,6 @@ function PracticeSetupScreen({
               value={openRouterApiKey}
             />
           </label>
-
-          <div className="practice-status-box">
-            <span className="label">PPO endpoint</span>
-            <strong>{scoreNetStatus.available ? 'Available' : 'Unavailable'}</strong>
-            <p>{scoreNetStatus.checkpoint ? formatCheckpointLabel(scoreNetStatus.checkpoint) : scoreNetStatusText}</p>
-            <button className="ghost-button small" onClick={onRefreshScoreNet} type="button">
-              Refresh PPO
-            </button>
-          </div>
         </div>
 
         <div className="arena-setup-actions">

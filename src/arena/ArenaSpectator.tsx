@@ -552,7 +552,7 @@ function getSeatModeSummary(config: SpectatorSeatConfig): string {
   }
 
   if (config.mode === 'builtin-legacy-v3') {
-    return 'guandan-ai v3.0';
+    return 'legacy v3';
   }
 
   if (config.mode === 'builtin-legacy-v1') {
@@ -561,6 +561,10 @@ function getSeatModeSummary(config: SpectatorSeatConfig): string {
 
   if (config.mode === 'builtin-baseline') {
     return '基础内置 heuristic';
+  }
+
+  if (config.mode === 'scorenet-ppo') {
+    return 'ScoreNet PPO learned policy';
   }
 
   if (config.mode === 'llmreranker') {

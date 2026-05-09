@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
 
-import AgentModeScreen from './agentMode/AgentModeScreen';
 import ArenaSetupScreen from './arena/ArenaSetupScreen';
 import ArenaSpectator from './arena/ArenaSpectator';
 import { loadPersistedSpectatorConfig, type SpectatorArenaConfig } from './arena/spectatorConfig';
@@ -13,11 +12,9 @@ type Route =
   | { page: 'practice' }
   | { page: 'arena-setup' }
   | { page: 'arena-spectator'; config: SpectatorArenaConfig }
-  | { page: 'agent' }
   | { page: 'multiplayer' };
 
 function resolveRoute(pathname: string): Route {
-  if (pathname.startsWith('/agent')) return { page: 'agent' };
   if (pathname === '/practice') return { page: 'practice' };
   if (pathname === '/arena') return { page: 'arena-setup' };
   if (pathname === '/multiplayer') return { page: 'multiplayer' };
@@ -46,10 +43,6 @@ export default function App() {
     if (mode === 'multiplayer') navigate('/multiplayer');
     else navigate(mode === 'practice' ? '/practice' : '/arena');
   }, []);
-
-  if (route.page === 'agent') {
-    return <AgentModeScreen />;
-  }
 
   if (route.page === 'multiplayer') {
     return <MultiplayerScreen />;
@@ -84,9 +77,6 @@ export default function App() {
             </a>
             <a className="ghost-button app-nav-link" href="/arena" onClick={(e) => { e.preventDefault(); navigate('/arena'); }}>
               4AI Arena
-            </a>
-            <a className="ghost-button app-nav-link" href="/agent?matches=10">
-              Agent Mode
             </a>
           </div>
         </header>

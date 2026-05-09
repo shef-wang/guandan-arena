@@ -6,6 +6,7 @@ import {
   OPENROUTER_DEFAULT_RERANKER_MODEL,
   type OpenRouterStatusEvent,
 } from './openrouter';
+import { createScoreNetSeatAgent } from './scoreNetSeatAgent';
 import type { SpectatorArenaConfig, SpectatorGlobalConfig, SpectatorSeatConfig } from './spectatorConfig';
 import type { GameState, Seat } from '../game/types';
 
@@ -74,6 +75,14 @@ export function resolveSpectatorSeatAgent(
       id: `builtin-baseline-seat-${seat}`,
       label: seatConfig.label || `Seat ${seat} Baseline`,
       profile: 'baseline',
+    });
+  }
+
+  if (seatConfig.mode === 'scorenet-ppo') {
+    return createScoreNetSeatAgent({
+      id: `scorenet-ppo-seat-${seat}`,
+      label: seatConfig.label || `Seat ${seat} Latest PPO ScoreNet`,
+      seat,
     });
   }
 

@@ -25,10 +25,19 @@ training/danzero_mvp/data/
 training/danzero_mvp/checkpoints/
 training/danzero_mvp/results/
 
-training/scorenet/checkpoints/
+training/scorenet/checkpoints/*
 training/scorenet/data/
 training/scorenet/rollouts/
 *.pt
+
+# Track the production ScoreNet checkpoint (stability_v3 iter 80, epoch 10).
+!training/scorenet/checkpoints/stability_v3_20260503_180902
+training/scorenet/checkpoints/stability_v3_20260503_180902/*
+!training/scorenet/checkpoints/stability_v3_20260503_180902/ppo_iter_080
+training/scorenet/checkpoints/stability_v3_20260503_180902/ppo_iter_080/*
+!training/scorenet/checkpoints/stability_v3_20260503_180902/ppo_iter_080/ppo
+training/scorenet/checkpoints/stability_v3_20260503_180902/ppo_iter_080/ppo/*
+!training/scorenet/checkpoints/stability_v3_20260503_180902/ppo_iter_080/ppo/epoch_010.pt
 
 tools/*.cjs
 tools/*.mjs

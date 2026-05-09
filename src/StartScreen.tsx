@@ -36,9 +36,6 @@ export default function StartScreen({ onSelectMode }: { onSelectMode: (mode: Vie
         </button>
       </div>
 
-      <div className="start-extra-links">
-        <a className="ghost-button" href="/agent?matches=10">Agent Debug Mode</a>
-      </div>
     </section>
   );
 }

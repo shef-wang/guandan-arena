@@ -9,6 +9,7 @@ export type SeatAgentMode =
   | 'builtin-legacy-v3'
   | 'builtin-legacy-vR'
   | 'builtin-balanced-v2'
+  | 'scorenet-ppo'
   | 'openrouter'
   | 'llmreranker';
 export type SpectatorSeatConfigMap = Record<Seat, SpectatorSeatConfig>;
@@ -64,10 +65,10 @@ export const DEFAULT_GLOBAL_CONFIG: SpectatorGlobalConfig = {
 };
 
 export const DEFAULT_SEAT_CONFIGS: SpectatorSeatConfigMap = {
-  0: { mode: 'builtin-legacy-v1', label: 'Seat 0 Legacy', model: '', apiKey: '' },
-  1: { mode: 'builtin-legacy-v1', label: 'Seat 1 Legacy', model: '', apiKey: '' },
-  2: { mode: 'builtin-legacy-v1', label: 'Seat 2 Legacy', model: '', apiKey: '' },
-  3: { mode: 'builtin-legacy-v1', label: 'Seat 3 Legacy', model: '', apiKey: '' },
+  0: { mode: 'builtin-legacy-v3', label: '', model: '', apiKey: '' },
+  1: { mode: 'builtin-legacy-v3', label: '', model: '', apiKey: '' },
+  2: { mode: 'builtin-legacy-v3', label: '', model: '', apiKey: '' },
+  3: { mode: 'builtin-legacy-v3', label: '', model: '', apiKey: '' },
 };
 
 export function loadPersistedSpectatorConfig(): SpectatorArenaConfig {
@@ -172,7 +173,7 @@ export function getSeatDisplayLabel(config: SpectatorSeatConfig): string {
   }
 
   if (config.mode === 'builtin-legacy-v3') {
-    return config.label || 'guandan-ai v3.0';
+    return config.label || 'legacy v3';
   }
 
   if (config.mode === 'builtin-legacy-v1') {
@@ -181,6 +182,10 @@ export function getSeatDisplayLabel(config: SpectatorSeatConfig): string {
 
   if (config.mode === 'builtin-baseline') {
     return config.label || '基础内置 heuristic';
+  }
+
+  if (config.mode === 'scorenet-ppo') {
+    return config.label || 'Latest PPO ScoreNet';
   }
 
   if (config.mode === 'llmreranker') {
@@ -211,6 +216,10 @@ export function getSeatSubtitle(config: SpectatorSeatConfig): string {
     return `${getSeatDisplayLabel(config)} · 基础启发式`;
   }
 
+  if (config.mode === 'scorenet-ppo') {
+    return `${getSeatDisplayLabel(config)} · learned policy`;
+  }
+
   if (config.mode === 'llmreranker') {
     return `${getSeatDisplayLabel(config)} · ${getOpenRouterModelLabel(config.model || OPENROUTER_DEFAULT_RERANKER_MODEL)}`;
   }
@@ -234,12 +243,8 @@ function getOpenRouterModelLabel(model: string): string {
 }
 
 function normalizeSeatMode(mode: SpectatorSeatConfig['mode'] | 'builtin' | 'builtin-strong'): SeatAgentMode {
-  if (mode === 'builtin') {
-    return 'builtin-legacy-v1';
-  }
-
-  if (mode === 'builtin-strong') {
-    return 'builtin-legacy-v1';
+  if (mode === 'builtin' || mode === 'builtin-strong' || mode === 'builtin-legacy-v1' || mode === 'builtin-legacy-vR' || mode === 'builtin-baseline' || mode === 'builtin-balanced-v2' || mode === 'llmreranker') {
+    return 'builtin-legacy-v3';
   }
 
   return mode;
