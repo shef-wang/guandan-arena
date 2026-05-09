@@ -130,4 +130,4 @@ Suggestions, sponsorship ideas for the LLM arena inference, methodology critique
 
 ## License
 
-No license file is included yet. If you want to use any of this code or the trained checkpoint outside of personal evaluation, please open an issue first.
+Released under the MIT License — see [`LICENSE`](LICENSE). Code, the ScoreNet weights in `public/scorenet/`, and the training assets in `training/` are all covered. Do whatever you want with them; an attribution back here is appreciated but not required.
