@@ -21,10 +21,6 @@ apikey/
 __pycache__/
 *.pyc
 
-training/danzero_mvp/data/
-training/danzero_mvp/checkpoints/
-training/danzero_mvp/results/
-
 training/scorenet/checkpoints/*
 training/scorenet/data/
 training/scorenet/rollouts/
