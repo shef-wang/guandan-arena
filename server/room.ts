@@ -1,13 +1,7 @@
 import { createSeededRandom } from '../src/game/cards';
 import { createNewGame } from '../src/game/state';
 import type { GameResult, GameState, Seat } from '../src/game/types';
-import {
-  buildArenaTurnInput,
-  applyArenaChosenAction,
-  createHeuristicAgent,
-  GuandanArenaMatch,
-  getLegalActionsForSeat,
-} from '../src/arena/engine';
+import { buildArenaTurnInput, createHeuristicAgent, GuandanArenaMatch } from '../src/arena/engine';
 import type { ArenaChosenAction, ArenaTurnInput, GuandanArenaAgent } from '../src/arena/types';
 import type { RoomConfig, SeatAssignment, RoomStateView } from './protocol';
 
@@ -143,7 +137,7 @@ export class GameRoom {
         id: `human-${assignment.playerId}-seat-${seat}`,
         label: `Human (${assignment.playerId})`,
         agentType: 'human',
-        decideTurn: (_input, _context) => {
+        decideTurn: () => {
           return new Promise<ArenaChosenAction>((resolve) => {
             this.humanResolvers.set(seat, resolve);
           });
@@ -151,18 +145,10 @@ export class GameRoom {
       };
     }
 
-    switch (assignment.agentType) {
-      case 'heuristic':
-      case 'openrouter':
-      case 'learned-policy':
-      case 'human':
-      case 'custom':
-      default:
-        return createHeuristicAgent({
-          id: assignment.agentId,
-          label: `AI ${assignment.agentId}`,
-          profile: 'legacy-v1',
-        });
-    }
+    return createHeuristicAgent({
+      id: assignment.agentId,
+      label: `AI ${assignment.agentId}`,
+      profile: 'legacy-v3.0',
+    });
   }
 }

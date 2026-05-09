@@ -20,17 +20,43 @@ Stack:
 
 ## Files
 
+Core training stack:
+
 - `feature_codec.ts`: state/action encoding with heuristic-augmented action features
 - `scorenet.py`: attention policy-value network
+- `codec_config.py` + `codec_constants.json`: shared encoding constants for Python
+- `runtime_utils.py`: device picker, seed helpers used across the Python scripts
 - `serve_policy.py`: stdin/stdout inference server for TS runners
 - `export_imitation_dataset.ts`: export legacy-v1 demonstration data
 - `train_imitation.py`: supervised warm-start training
 - `export_ppo_rollouts.ts`: generate PPO rollouts with GAE
 - `train_ppo.py`: PPO update step
 - `evaluate.ts`: learned vs legacy evaluation (with duplicate dealing)
-- `selfplay_loop.sh`: end-to-end orchestration of one milestone
-- `run_selfplay.sh`: wrapper that launches `selfplay_loop.sh` in self-play mode
-- `run_gauntlet.sh` + `aggregate_gauntlet.py`: final benchmark gauntlet vs all heuristic versions
+- `bench_move_latency.ts`: per-move latency micro-benchmark for the policy server
+
+Orchestration scripts:
+
+- `selfplay_loop.sh`: end-to-end orchestration of one milestone (one of the
+  curriculum stages or self-play, depending on env). All other shell scripts
+  call into this.
+- `run_curriculum.sh`: drives the **two-step PPO curriculum** (legacy-v2.6
+  then legacy-v3.0) as a single command, snapshotting milestone winners.
+- `run_selfplay.sh`: wrapper that launches `selfplay_loop.sh` in self-play
+  mode against a frozen checkpoint pool (post-curriculum stage).
+- `init_prior_manifest.sh`: bootstrap the frozen-pool manifest used by the
+  self-play regimes from a directory of milestone checkpoints.
+- `run_gauntlet.sh` + `aggregate_gauntlet.py`: final benchmark gauntlet vs
+  every heuristic version.
+
+Reference docs and bundled artifacts:
+
+- `TRAINING_HISTORY.md`: chronological log of milestones, what worked, and
+  what was retired. Useful when picking PPO hyperparameters or comparing
+  checkpoints.
+- `checkpoints/stability_v3_20260503_180902/ppo_iter_080/ppo/epoch_010.pt`:
+  the production ScoreNet checkpoint that ships with the repo. This is the
+  weights file used by `serve_policy.py` and the Practice / Spectator UIs
+  (`scorenet-ppo` mode). Everything else under `checkpoints/` is gitignored.
 
 ## Who is the learner?
 
@@ -78,6 +104,12 @@ CHECKPOINT=training/scorenet/checkpoints/smoke_ppo/epoch_001.pt MATCHES=4 PYTHON
 ```
 
 ## Standard Training Flow
+
+For the full curriculum (v2.6 milestone → v3.0 milestone → self-play →
+gauntlet) use `run_curriculum.sh`, which snapshots milestone winners
+under `checkpoints/milestones/` and chains the phases automatically.
+The sections below describe the underlying single-milestone loop and
+the manual step-by-step variant.
 
 ### Option A: One-command loop (recommended)
 
