@@ -5,7 +5,7 @@ import { applyPass, applyPlay, createNewGame, getSeatStatus } from './game/state
 import type { Card, GameState, PlayerState, Suit } from './game/types';
 import GameTableScene from './table/GameTableScene';
 import { PlayingCard, formatPlacementKey } from './ui/tableWidgets';
-import { applyArenaChosenAction, buildArenaTurnInput } from './arena/engine';
+import { applyArenaChosenAction, buildArenaTurnInput, getLegalActionsForSeat } from './arena/engine';
 import { createOpenRouterAgent } from './arena/openrouter';
 import { getScoreNetSession, scoreNetChooseIndex } from './arena/scoreNetBrowserSession';
 import type { ArenaChosenAction } from './arena/types';
@@ -297,17 +297,13 @@ export default function PracticeTable() {
           state: game,
         });
 
-        setGame((current) => {
-          if (current.winnerTeam !== null || current.currentPlayer !== actingSeat) {
-            return current;
-          }
-
-          return applyArenaChosenAction(current, actingSeat, action);
-        });
+        setGame((current) => applyAiActionSafely(current, actingSeat, action, 'openrouter'));
         return;
       } catch (error) {
         const message = error instanceof Error ? error.message : 'OpenRouter request failed';
         setLlmStatus(`fallback: ${message}`);
+        setGame((current) => applyLegalFallback(current, actingSeat, 'openrouter-error'));
+        return;
       }
     }
 
@@ -324,19 +320,16 @@ export default function PracticeTable() {
           throw new Error('PPO returned no legal action.');
         }
 
-        const action: ArenaChosenAction = chosen.kind === 'pass' ? { kind: 'pass' } : { kind: 'play', actionId: chosen.actionId };
-        setGame((current) => {
-          if (current.winnerTeam !== null || current.currentPlayer !== actingSeat) {
-            return current;
-          }
-
-          return applyArenaChosenAction(current, actingSeat, action);
-        });
+        const action: ArenaChosenAction =
+          chosen.kind === 'pass' ? { kind: 'pass' } : { kind: 'play', actionId: chosen.actionId };
+        setGame((current) => applyAiActionSafely(current, actingSeat, action, 'ppo'));
         setLlmStatus(`ppo: ${formatCheckpointLabel(choice.checkpoint_label)}`);
         return;
       } catch (error) {
         const message = error instanceof Error ? error.message : 'ScoreNet request failed';
         setLlmStatus(`PPO failed · using built-in AI this turn: ${message}`);
+        setGame((current) => applyLegalFallback(current, actingSeat, 'ppo-error'));
+        return;
       }
     }
 
@@ -346,17 +339,71 @@ export default function PracticeTable() {
     } catch {
       decision = chooseAiAction(game, actingSeat, PRACTICE_LEGACY_PROFILE);
     }
-    setGame((current) => {
-      if (current.winnerTeam !== null || current.currentPlayer !== actingSeat) {
-        return current;
-      }
+    const preferred: ArenaChosenAction =
+      decision.type === 'play' && decision.play
+        ? { kind: 'play', actionId: `play:${decision.play.key}` }
+        : { kind: 'pass' };
+    setGame((current) => applyAiActionSafely(current, actingSeat, preferred, 'legacy'));
+  }
 
-      if (decision.type === 'play' && decision.play) {
-        return applyPlay(current, actingSeat, decision.play);
-      }
+  // Apply an AI's preferred action to the LATEST game state, validating it
+  // against the freshly-computed legal actions for `current`. If the preferred
+  // action is no longer legal (e.g. another setGame slipped in between when
+  // the async decision was made and when this updater runs), fall back to a
+  // synchronously-computed legal action so we never apply an illegal play.
+  function applyAiActionSafely(
+    current: GameState,
+    actingSeat: 1 | 2 | 3,
+    preferred: ArenaChosenAction,
+    source: string,
+  ): GameState {
+    if (current.winnerTeam !== null || current.currentPlayer !== actingSeat) {
+      return current;
+    }
 
-      return applyPass(current, actingSeat);
-    });
+    const legalNow = getLegalActionsForSeat(current, actingSeat);
+    const stillLegal =
+      preferred.kind === 'pass'
+        ? legalNow.some((option) => option.kind === 'pass')
+        : legalNow.some((option) => option.kind === 'play' && option.actionId === preferred.actionId);
+
+    if (stillLegal) {
+      try {
+        return applyArenaChosenAction(current, actingSeat, preferred);
+      } catch (error) {
+        // The action passed our re-check above, so this should be impossible —
+        // but if applyPlay's defensive guard rejects it, log and fall through
+        // instead of leaving the game in a broken state.
+        console.error(
+          `[PracticeTable] applyArenaChosenAction failed for seat ${actingSeat} (source=${source})`,
+          error,
+        );
+      }
+    }
+
+    return applyLegalFallback(current, actingSeat, `${source}-stale`);
+  }
+
+  // Compute and apply a legal action for `current` synchronously, using the
+  // legacy heuristic. Used when an async AI decision turned out to be stale.
+  function applyLegalFallback(current: GameState, actingSeat: 1 | 2 | 3, source: string): GameState {
+    if (current.winnerTeam !== null || current.currentPlayer !== actingSeat) {
+      return current;
+    }
+
+    let fallback: ReturnType<typeof chooseAiAction>;
+    try {
+      fallback = chooseAiAction(current, actingSeat, PRACTICE_LEGACY_PROFILE);
+    } catch (error) {
+      console.error(`[PracticeTable] legacy fallback failed for seat ${actingSeat} (source=${source})`, error);
+      return current.tablePlay ? applyPass(current, actingSeat) : current;
+    }
+
+    if (fallback.type === 'play' && fallback.play) {
+      return applyPlay(current, actingSeat, fallback.play);
+    }
+
+    return applyPass(current, actingSeat);
   }
 
   const humanTurn = game.currentPlayer === 0 && game.winnerTeam === null;

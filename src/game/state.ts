@@ -1,5 +1,5 @@
 import { createDeck, dealHands, sortHand } from './cards';
-import { sameTeam } from './rules';
+import { beats, sameTeam } from './rules';
 import type { ActionHistoryEntry, GameResult, GameState, Play, PlayerState, Seat, SeatTrace, Team } from './types';
 import { shuffle } from './cards';
 
@@ -46,12 +46,28 @@ export function createNewGame(random: () => number = Math.random): GameState {
 }
 
 export function applyPlay(state: GameState, seat: Seat, play: Play): GameState {
+  if (state.tablePlay && !beats(play, state.tablePlay.play)) {
+    throw new Error(
+      `applyPlay rejected an illegal play for seat ${seat}: "${play.label}" cannot follow ` +
+        `"${state.tablePlay.play.label}" (owner seat ${state.tablePlay.owner}).`,
+    );
+  }
+
+  const playedIds = new Set(play.cards.map((card) => card.id));
+  const handIds = new Set(state.players[seat].hand.map((card) => card.id));
+  for (const cardId of playedIds) {
+    if (!handIds.has(cardId)) {
+      throw new Error(
+        `applyPlay rejected a play for seat ${seat}: card "${cardId}" is not in the seat's hand.`,
+      );
+    }
+  }
+
   const players = state.players.map((player) => {
     if (player.seat !== seat) {
       return player;
     }
 
-    const playedIds = new Set(play.cards.map((card) => card.id));
     const nextHand = sortHand(player.hand.filter((card) => !playedIds.has(card.id)));
 
     return {

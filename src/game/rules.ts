@@ -1465,7 +1465,19 @@ export function autoArrangeHand(cards: Card[]): string[][] {
     return [];
   }
 
-  return findBestPartition(cards).groups;
+  const primary = findBestPartition(cards);
+  if (!primary.fallbackUsed) {
+    return primary.groups;
+  }
+
+  // Some 27-card "many-overlap" hands can hit the default budget in the UI
+  // thread and fall back to a weaker partition. Retry once with a larger
+  // budget so one-click arrange prefers quality over latency in these edge
+  // cases.
+  return findBestPartition(cards, {
+    timeLimitMs: 5_000,
+    nodeLimit: 5_000_000,
+  }).groups;
 }
 
 // Greedy "specials-first" partition kept as a deterministic fallback when the
