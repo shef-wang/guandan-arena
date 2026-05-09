@@ -353,7 +353,7 @@ export default function PracticeTable() {
         return;
       } catch (error) {
         const message = error instanceof Error ? error.message : 'ScoreNet request failed';
-        setLlmStatus(`ppo fallback: ${message}`);
+        setLlmStatus(`PPO failed · using built-in AI this turn: ${message}`);
       }
     }
 

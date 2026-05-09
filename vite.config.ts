@@ -118,6 +118,11 @@ class ScoreNetDevPolicyServer {
 const policyServer = new ScoreNetDevPolicyServer();
 const OPENROUTER_LOCAL_KEY_CANDIDATES = ['apikey/key.rtf', 'key.rtf', 'apikey/key', 'key'] as const;
 
+/** Default weights bundled in git (ppo_iter 80 · epoch 10). */
+const SCORENET_CHECKPOINT_ROOT = () => resolve(process.cwd(), 'training/scorenet/checkpoints');
+const DEFAULT_SCORENET_CHECKPOINT_RELATIVE =
+  'training/scorenet/checkpoints/stability_v3_20260503_180902/ppo_iter_080/ppo/epoch_010.pt';
+
 export default defineConfig({
   plugins: [react(), scoreNetDevApi()],
 });
@@ -182,7 +187,7 @@ function scoreNetDevApi() {
 function resolveRequestedCheckpoint(raw: unknown): string | null {
   if (typeof raw === 'string' && raw.trim()) {
     const candidate = resolve(process.cwd(), raw.trim());
-    const checkpointRoot = resolve(process.cwd(), 'training/scorenet/checkpoints');
+    const checkpointRoot = SCORENET_CHECKPOINT_ROOT();
     if (!candidate.startsWith(`${checkpointRoot}/`) || !existsSync(candidate)) {
       throw new Error('Invalid ScoreNet checkpoint path.');
     }
@@ -192,9 +197,37 @@ function resolveRequestedCheckpoint(raw: unknown): string | null {
   return findLatestScoreNetCheckpoint();
 }
 
+/** Resolve repo-relative `.pt` under `training/scorenet/checkpoints/`, or return null + warn if invalid. */
+function resolveOptionalCheckpointFromEnv(trimmedRelative: string): string | null {
+  const candidate = resolve(process.cwd(), trimmedRelative);
+  const checkpointRoot = SCORENET_CHECKPOINT_ROOT();
+  if (!candidate.startsWith(`${checkpointRoot}/`) || !existsSync(candidate)) {
+    console.warn(
+      `[scorenet-dev-api] SCORENET_CHECKPOINT ignored (missing file or outside training/scorenet/checkpoints): ${trimmedRelative}`,
+    );
+    return null;
+  }
+  return candidate;
+}
+
 function findLatestScoreNetCheckpoint(): string | null {
-  const root = resolve(process.cwd(), 'training/scorenet/checkpoints');
-  if (!existsSync(root)) return null;
+  const checkpointRoot = SCORENET_CHECKPOINT_ROOT();
+
+  const envOverride = process.env.SCORENET_CHECKPOINT?.trim();
+  if (envOverride) {
+    const resolved = resolveOptionalCheckpointFromEnv(envOverride);
+    if (resolved) {
+      return resolved;
+    }
+  }
+
+  const usePinnedDefault = process.env.SCORENET_USE_PINNED !== '0';
+  const pinnedAbsolute = resolve(process.cwd(), DEFAULT_SCORENET_CHECKPOINT_RELATIVE);
+  if (usePinnedDefault && existsSync(pinnedAbsolute)) {
+    return pinnedAbsolute;
+  }
+
+  if (!existsSync(checkpointRoot)) return null;
 
   let latest: { path: string; mtimeMs: number; iteration: number; epoch: number; isSmoke: boolean } | null = null;
   const visit = (dir: string) => {
@@ -209,7 +242,7 @@ function findLatestScoreNetCheckpoint(): string | null {
         continue;
       }
 
-      const relativePath = relative(root, fullPath);
+      const relativePath = relative(checkpointRoot, fullPath);
       const iteration = Number(relativePath.match(/ppo_iter_(\d+)/)?.[1] ?? 0);
       const epoch = Number(entry.name.match(/epoch_(\d+)\.pt/)?.[1] ?? 0);
       const isSmoke = relativePath.toLowerCase().includes('smoke');
@@ -222,20 +255,21 @@ function findLatestScoreNetCheckpoint(): string | null {
     }
   };
 
-  visit(root);
+  visit(checkpointRoot);
   return latest?.path ?? null;
 }
 
+/** Higher return value ⇒ `a` is a better checkpoint than `b`. */
 function compareCheckpoints(
   a: { mtimeMs: number; iteration: number; epoch: number; isSmoke: boolean },
   b: { mtimeMs: number; iteration: number; epoch: number; isSmoke: boolean },
 ): number {
   if (a.isSmoke !== b.isSmoke) return a.isSmoke ? -1 : 1;
-  // Prefer newest checkpoint on disk: continued runs append epochs and bump mtime,
-  // so this tracks the active training line rather than an older high-ppo_iter tree.
-  if (a.mtimeMs !== b.mtimeMs) return a.mtimeMs - b.mtimeMs;
+  // Prefer strongest training milestone (ppo_iter × epoch); mtime breaks ties only — file mtime alone
+  // wrongly picked unrelated recently-touched shallow runs ahead of bundled stability_v3 weights.
   if (a.iteration !== b.iteration) return a.iteration - b.iteration;
-  return a.epoch - b.epoch;
+  if (a.epoch !== b.epoch) return a.epoch - b.epoch;
+  return a.mtimeMs - b.mtimeMs;
 }
 
 async function readJsonBody(req: import('node:http').IncomingMessage): Promise<Record<string, unknown>> {
