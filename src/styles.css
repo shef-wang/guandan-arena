@@ -374,6 +374,10 @@ button {
 .practice-status-box p {
   color: rgba(239, 245, 255, 0.76);
   line-height: 1.5;
+  /* Long PPO checkpoint paths have no spaces — let them wrap mid-token instead
+     of overflowing the card. */
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .practice-setup-controls {

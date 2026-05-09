@@ -48,7 +48,7 @@ export default function PracticeTable() {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [selectedOptionIndex, setSelectedOptionIndex] = useState(0);
   const [organizedGroups, setOrganizedGroups] = useState<string[][]>([]);
-  const [aiMode, setAiMode] = useState<PracticeAiMode>('legacy');
+  const [aiMode, setAiMode] = useState<PracticeAiMode>('ppo');
   const [openRouterApiKey, setOpenRouterApiKey] = useState('');
   const [llmStatus, setLlmStatus] = useState('未启用');
   const [localKeySource, setLocalKeySource] = useState<string | null>(null);
