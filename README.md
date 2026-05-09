@@ -1,141 +1,132 @@
 # Guandan Arena
 
-This project is ultimately about building superhuman AI for the game of Guandan.
+An open-source playground for watching and playing against different kinds of Guandan (掼蛋) AI in your browser.
 
-The working thesis for this repo is:
+The pitch: most existing Guandan AI work is either a research codebase with no UI, or a closed product with no model access. This repo is a small middle ground — a browser-based table where you can sit chat-LLMs (DeepSeek, Kimi, Gemma), a small zero-style PPO model, and rule-based heuristics at the same four-player table, watch them play each other, or play against any of them yourself.
 
-1. To build very strong Guandan agents, we need a serious competitive arena.
-2. To build that arena, we need a high-performance game engine, a usable GUI, reproducible evaluation, and support for modern models, especially open-weight/local models.
-3. To get there in practice, we are building the system in layers, starting from a playable MVP and expanding toward multi-agent evaluation and learned policies.
+**Live demo (no install):** [guandan-arena-sigma.vercel.app](https://guandan-arena-sigma.vercel.app/)
 
-This repository is under active development.
+## What you can do here
 
-## Current Status
+- **Play one click in your browser** against rule-based heuristics or any of several mainstream chat-LLMs (DeepSeek V3, Kimi K2.6, Gemma 4 26B), via OpenRouter.
+- **Watch a 4-AI arena** where you mix and match seats — a chat-LLM here, a heuristic there, a learned policy in the other corner — and observe how they interact across full games.
+- **Run the project locally** to also play against a small PPO-trained policy network (`ScoreNet`) checked into the repo.
 
-- A public MVP is live here: [guandan-arena-sigma.vercel.app](https://guandan-arena-sigma.vercel.app/)
-- The live MVP is intentionally narrow:
-  - single-player only
-  - `1 human vs 3 built-in AI`
-  - built-in rule-based `legacy-v1` opponents
-- The broader arena, LLM competition flows, and learned-agent work are still in progress.
+The "play against an LLM" and "watch LLM vs zero-style RL vs rule-based" comparisons are, as far as I know, not available anywhere else in this game.
 
-## Project Direction
+## What works where
 
-The end state is not just a casual card game site.
-The end state is a development and evaluation environment for strong Guandan agents.
 
-That means this repo is being shaped around four pillars:
+| Feature                                       | Live Vercel demo | Local (`npm run dev`)           |
+| --------------------------------------------- | ---------------- | ------------------------------- |
+| Game engine + browser UI                      | yes              | yes                             |
+| Heuristic bots (legacy-v1, legacy-v3)         | yes              | yes                             |
+| Chat-LLMs via OpenRouter (you supply the key) | yes              | yes                             |
+| 4-AI arena with mix-and-match seats           | yes              | yes                             |
+| ScoreNet PPO policy in the browser            | no — see note    | yes                             |
+| Multiplayer (humans vs humans)                | no               | yes (with `npm run server:dev`) |
 
-- `Game engine`
-  - fast, deterministic Guandan rules and state transitions
-  - stable legal-action generation
-  - reproducible match execution
-- `GUI / product surface`
-  - a browser-based table for rapid iteration
-  - human-playable interfaces for testing game feel and correctness
-  - a path to deployable demos
-- `Arena`
-  - multi-agent match running
-  - seeded evaluation and comparison
-  - support for agent-vs-agent tournaments
-- `Learning stack`
-  - heuristic baselines
-  - open-weight / local model integration
-  - imitation learning and self-play reinforcement learning
 
-## What Exists In The Repo Today
+The PPO model is served by a local Python process (`training/scorenet/serve_policy.py`) bridged through the Vite dev server. Vercel hosts the static frontend only, so the live demo cannot serve the learned policy. Running locally is the way to play against the PPO model today.
 
-### 1. Core Guandan engine
+## Prior art and acknowledgements
 
-The TypeScript game implementation is the foundation of the whole project.
-It handles cards, rules, legal move generation, game state updates, and result resolution.
+This project is not the first or strongest Guandan AI. It exists alongside several pieces of serious prior work, and is meant to complement rather than replace them:
 
-Key files:
+- **[DanZero](https://arxiv.org/abs/2210.17087)** (Lu et al., AAAI 2023) and **[DanZero+](https://arxiv.org/abs/2312.02561)** — the foundational reinforcement learning work for Guandan. Distributed Deep Monte Carlo training, hand-crafted features. Code at [submit-paper/Danzero_plus](https://github.com/submit-paper/Danzero_plus). Not packaged for direct browser play, no released ready-to-run weights from the original authors.
+- **[DanLM](https://github.com/dashidhy/DanLM)** (released March 2026) — a feature-free TinyLM Transformer for Guandan trained with DMC self-play, with open weights, a local web UI, and a reproduced/improved DanZero baseline bundled in. Currently #2 on the [Botzone GuanDan leaderboard](https://en.botzone.org.cn/game/ranklist/65490c16ec1ab1389702dced) and beats the strongest competition baselines at 80%+ win rates. As a "play against a learned Guandan model" experience, DanLM is more rigorously evaluated than the policy in this repo and worth checking out.
+- **[OpenGuanDan](https://github.com/GameAI-NJUPT/OpenGuanDan)** — a Guandan benchmark and simulation environment built for AI research, with a WebSocket protocol layer.
 
-- `src/game/rules.ts`
-- `src/game/state.ts`
-- `src/game/cards.ts`
-- `src/game/types.ts`
+If you want the strongest open-source Guandan-only model, look at DanLM. If you want to compare chat-LLMs, learned policies, and heuristics in the same UI, this repo is the easier starting point.
 
-### 2. Browser GUI
+## What's in the repo
 
-There is already a React/Vite frontend for interacting with the game in the browser.
-The current public deployment uses this layer to ship the single-player MVP.
+### Game engine and browser UI
 
-Key files:
+A TypeScript Guandan implementation (rules, legal-action generation, state transitions, match resolution) and a React/Vite frontend.
 
-- `src/App.tsx`
-- `src/PracticeTable.tsx`
-- `src/table/GameTableScene.tsx`
-- `src/ui/tableWidgets.tsx`
+- `src/game/rules.ts`, `src/game/state.ts`, `src/game/cards.ts`, `src/game/types.ts`
+- `src/App.tsx`, `src/PracticeTable.tsx`, `src/table/GameTableScene.tsx`
 
-### 3. Arena / agent infrastructure
+### Arena infrastructure
 
-The repo already contains arena-oriented code for running agent-controlled matches and experimenting with different decision systems.
-This is part of the longer path toward a real model competition environment.
+A four-seat arena that supports mixing different agent types in the same match, with a spectator UI for watching them play.
 
-Key files:
+- `src/arena/spectatorConfig.ts`, `src/arena/spectatorMatch.ts`, `src/arena/ArenaSpectator.tsx`
+- `src/arena/openrouter.ts` — chat-LLM seat agents
+- `src/arena/scoreNetSeatAgent.ts` — PPO policy seat agent (local-only)
+- `src/arena/runHeadlessMatch.ts`, `src/arena/runBuiltinTournament.ts` — CLI tournament runners
 
-- `src/arena/engine.ts`
-- `src/arena/runBuiltinTournament.ts`
-- `src/arena/openrouter.ts`
-- `src/arena/runHeadlessMatch.ts`
+### Heuristic agent ladder
 
-### 4. Baseline and training work
+Rule-based agents of progressively increasing strength, used both as in-game opponents and as a teacher curriculum for training the PPO model. Built incrementally with help from Claude Opus.
 
-The current built-in rule-based agents act as baselines.
-Alongside that, the repo contains early training infrastructure for a DanZero-style path toward learned Guandan agents.
+- `src/game/ai.ts` — `legacy-v1` (clean rule-based), several `legacy-v2.x` iterations, `legacy-v3.0` (top-K candidates plus multi-policy Monte Carlo rollouts to terminal)
 
-Key files and docs:
+### ScoreNet training stack
 
-- `src/game/ai.ts`
-- `docs/danzero-style-mvp-roadmap.md`
-- `training/danzero_mvp/README.md`
-- `training/danzero_mvp/train_imitation.py`
-- `training/danzero_mvp/train_ppo.py`
+A small attention-based policy and value network, trained with imitation warm-start on `legacy-v1` followed by PPO with GAE. Self-play uses a heuristic-mixed curriculum rather than pure self-play.
 
-## Why The MVP Looks Small
+- `training/scorenet/scorenet.py`, `training/scorenet/train_imitation.py`, `training/scorenet/train_ppo.py`
+- `training/scorenet/run_selfplay.sh`, `training/scorenet/selfplay_loop.sh`
+- `training/scorenet/serve_policy.py` — local inference server bridged via Vite
+- `training/scorenet/checkpoints/stability_v3_20260503_180902/ppo_iter_080/ppo/epoch_010.pt` — the production checkpoint, tracked in the repo so it's reproducible
 
-The current Vercel deployment is deliberately much smaller than the ambition of the repo.
+### Multiplayer server
 
-That is by design.
+A Node + WebSocket server for human-vs-human play locally.
 
-The MVP is there to prove and polish the lowest layer:
+- `server/index.ts`
 
-- the game runs correctly in the browser
-- the table UI is usable
-- the engine can support a real playable product
-- the baseline AI can drive a complete game loop
+## Honest evaluation status
 
-That playable slice is useful on its own, but it is also a stepping stone toward the larger arena and training system.
+Against the strongest in-repo heuristic (`legacy-v3.0`), the current ScoreNet checkpoint achieves ~42% single-seat and ~26% pair-level win rate (see `[training/scorenet/checkpoints/stability_v3_20260503_180902/ppo_iter_080/eval_summary.json](training/scorenet/checkpoints/stability_v3_20260503_180902/ppo_iter_080/eval_summary.json)`). It is fun to play against but does not yet beat the strongest heuristic teacher, and has not been benchmarked against external bots like Botzone competition entries.
 
-## Near-Term Path
+The methodology bet — using a hand-built heuristic curriculum as a PPO teacher — differs from DanLM's pure self-play DMC. Whether this curriculum approach can close the gap with stronger pure self-play setups is something I'd like to find out.
 
-The likely path forward is:
+## Running locally
 
-1. continue improving the engine and GUI until the single-player product feels solid
-2. strengthen the arena and tournament harness for agent-vs-agent evaluation
-3. integrate stronger model-based agents, especially local/open-weight ones
-4. train and benchmark learned policies against the existing heuristic baselines
-5. iterate toward agents that materially outperform the current handcrafted bots
-
-## Running Locally
-
-This repo currently ships a Vite frontend.
+You need Node 18+ and (for the PPO model) Python 3.11+ with PyTorch on Apple Silicon or another MPS/CUDA target.
 
 ```bash
 npm install
 npm run dev
 ```
 
-For a production build:
+For the PPO policy server, set up the Python env once:
 
 ```bash
-npm run build
+python -m venv .venv-danzero
+source .venv-danzero/bin/activate
+pip install -r training/scorenet/requirements.txt
 ```
 
-## Repo Notes
+`npm run dev` will then auto-spawn `serve_policy.py` the first time the browser hits `/api/scorenet/choose`.
 
-- The live web app is only the current MVP, not the full vision of the repository.
-- The repo contains experimental and in-progress components; expect active iteration.
-- Documentation in `docs/` and `training/danzero_mvp/` is a better guide to the long-term direction than the current public demo alone.
+To play against chat-LLMs, supply an OpenRouter API key in the Practice or Arena setup screen. You can also drop the key into `apikey/key` (gitignored) and it will be picked up automatically in dev.
+
+For the multiplayer server:
+
+```bash
+npm run server:dev
+```
+
+For headless arena tournaments:
+
+```bash
+npm run arena:headless
+```
+
+## What's next
+
+- **An LLM-vs-LLM Guandan leaderboard.** The most novel piece in this repo is the ability to seat several chat-LLMs at the same table. The natural next step is a public leaderboard with cost-per-game, latency, and head-to-head win rates across DeepSeek, Qwen, Kimi, GPT, Claude, Gemma, and others. The question I most want to answer: do Chinese-trained LLMs play this Chinese cultural game better than Western ones? Funding the inference is the open problem.
+- **Continue training the PPO model** to see how far the heuristic-curriculum approach can be pushed.
+- **Make the Vercel deployment more useful** — at minimum, default the in-browser Practice mode to a working agent, and explore lightweight inference options for shipping a small learned policy to the static site.
+
+## Contributing and contact
+
+Suggestions, sponsorship ideas for the LLM arena inference, methodology critiques, and pull requests are all welcome — open an issue or reach out.
+
+## License
+
+No license file is included yet. If you want to use any of this code or the trained checkpoint outside of personal evaluation, please open an issue first.
