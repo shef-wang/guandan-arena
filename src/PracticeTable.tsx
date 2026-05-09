@@ -42,7 +42,8 @@ interface LegacyAiWorkerResponse {
   decision: ReturnType<typeof chooseAiAction>;
 }
 
-const HY3_MODEL = 'tencent/hy3-preview:free';
+const PRACTICE_OPENROUTER_MODEL = 'deepseek/deepseek-chat-v3-0324';
+const PRACTICE_OPENROUTER_LABEL = 'DeepSeek V3';
 const PRACTICE_OPENROUTER_KEY_STORAGE = 'guandan-practice-openrouter-key';
 const PRACTICE_LEGACY_PROFILE = 'legacy-v3.0' as const;
 
@@ -155,7 +156,7 @@ export default function PracticeTable() {
 
   const hasOpenRouterKey = openRouterApiKey.trim().length > 0;
   const aiModeLabel =
-    aiMode === 'openrouter' ? 'OpenRouter / HY3' : aiMode === 'ppo' ? 'Latest PPO ScoreNet' : '内置 legacy-v3.0';
+    aiMode === 'openrouter' ? `OpenRouter / ${PRACTICE_OPENROUTER_LABEL}` : aiMode === 'ppo' ? 'Latest PPO ScoreNet' : '内置 legacy-v3.0';
 
   const openRouterSeatAgent = useMemo(() => {
     if (!hasOpenRouterKey) {
@@ -164,9 +165,9 @@ export default function PracticeTable() {
 
     return createOpenRouterAgent({
       id: 'practice-openrouter-agent',
-      label: 'Practice HY3',
+      label: `Practice ${PRACTICE_OPENROUTER_LABEL}`,
       apiKey: openRouterApiKey.trim(),
-      model: HY3_MODEL,
+      model: PRACTICE_OPENROUTER_MODEL,
       siteName: 'Guandan Practice',
       siteUrl: typeof window !== 'undefined' ? window.location.origin : undefined,
       onStatus(event) {
@@ -675,7 +676,7 @@ export default function PracticeTable() {
                 onClick={() => setAiMode('openrouter')}
                 type="button"
               >
-                HY3
+                {PRACTICE_OPENROUTER_LABEL}
               </button>
               <button
                 className={`ghost-button hud-inline-button ${aiMode === 'ppo' ? 'active' : ''}`}
@@ -690,7 +691,7 @@ export default function PracticeTable() {
               <input
                 className="hud-key-input"
                 onChange={(event) => setOpenRouterApiKey(event.target.value)}
-                placeholder="sk-or-v1-...（HY3 使用的 OpenRouter key）"
+                placeholder={`sk-or-v1-...（${PRACTICE_OPENROUTER_LABEL} 使用的 OpenRouter key）`}
                 type="password"
                 value={openRouterApiKey}
               />
@@ -782,14 +783,14 @@ function PracticeSetupScreen({
             type="button"
           >
             <span className="start-mode-kicker">BYOK</span>
-            <strong>HY3</strong>
+            <strong>{PRACTICE_OPENROUTER_LABEL}</strong>
             <p>Uses local key file first, then manual OpenRouter key; falls back to legacy-v3.0 on errors.</p>
           </button>
         </div>
 
         <div className="practice-setup-controls">
           <label className="agent-form-field">
-            <span>OpenRouter key for HY3 mode</span>
+            <span>OpenRouter key for {PRACTICE_OPENROUTER_LABEL} mode</span>
             <input
               onChange={(event) => onOpenRouterApiKeyChange(event.target.value)}
               placeholder="sk-or-v1-..."
@@ -911,35 +912,37 @@ function formatCheckpointLabel(checkpoint: string): string {
 }
 
 function formatOpenRouterStatus(code: string): string {
+  const prefix = PRACTICE_OPENROUTER_LABEL;
+
   if (code === 'requesting') {
-    return 'hy3: 请求中';
+    return `${prefix}: 请求中`;
   }
 
   if (code === 'success') {
-    return 'hy3: 已出牌';
+    return `${prefix}: 已出牌`;
   }
 
   if (code === 'request_error') {
-    return 'hy3: 接口失败';
+    return `${prefix}: 接口失败`;
   }
 
   if (code === 'invalid_json') {
-    return 'hy3: 返回格式异常';
+    return `${prefix}: 返回格式异常`;
   }
 
   if (code === 'repairing') {
-    return 'hy3: 修复中';
+    return `${prefix}: 修复中`;
   }
 
   if (code === 'repair_success') {
-    return 'hy3: 修复成功';
+    return `${prefix}: 修复成功`;
   }
 
   if (code === 'fallback') {
-    return 'hy3: 已回退到 legacy';
+    return `${prefix}: 已回退到 legacy`;
   }
 
-  return 'hy3: 已跳过';
+  return `${prefix}: 已跳过`;
 }
 
 interface StraightFlushHint {

@@ -8,7 +8,6 @@ import {
   GuandanArenaMatch,
   getLegalActionsForSeat,
 } from '../src/arena/engine';
-import { createOpenRouterAgent, createOpenRouterRerankerAgent } from '../src/arena/openrouter';
 import type { ArenaChosenAction, ArenaTurnInput, GuandanArenaAgent } from '../src/arena/types';
 import type { RoomConfig, SeatAssignment, RoomStateView } from './protocol';
 
@@ -154,13 +153,7 @@ export class GameRoom {
 
     switch (assignment.agentType) {
       case 'heuristic':
-        return createHeuristicAgent({
-          id: assignment.agentId,
-          label: `AI ${assignment.agentId}`,
-          profile: 'legacy-v1',
-        });
       case 'openrouter':
-      case 'llmreranker':
       case 'learned-policy':
       case 'human':
       case 'custom':

@@ -1,9 +1,7 @@
 import { createHeuristicAgent, GuandanArenaMatch } from './engine';
 import {
   createOpenRouterAgent,
-  createOpenRouterRerankerAgent,
   OPENROUTER_DEFAULT_BASE_URL,
-  OPENROUTER_DEFAULT_RERANKER_MODEL,
   type OpenRouterStatusEvent,
 } from './openrouter';
 import { createScoreNetSeatAgent } from './scoreNetSeatAgent';
@@ -83,20 +81,6 @@ export function resolveSpectatorSeatAgent(
       id: `scorenet-ppo-seat-${seat}`,
       label: seatConfig.label || `Seat ${seat} Latest PPO ScoreNet`,
       seat,
-    });
-  }
-
-  if (seatConfig.mode === 'llmreranker') {
-    return createOpenRouterRerankerAgent({
-      id: `llmreranker-seat-${seat}`,
-      label: seatConfig.label || `Seat ${seat} LLM Reranker`,
-      apiKey: seatConfig.apiKey.trim() || globalConfig.apiKey.trim(),
-      model: seatConfig.model.trim() || OPENROUTER_DEFAULT_RERANKER_MODEL,
-      baseUrl: globalConfig.baseUrl.trim() || OPENROUTER_DEFAULT_BASE_URL,
-      siteName: 'Guandan Arena',
-      siteUrl: options?.siteUrl,
-      seat,
-      onStatus: options?.onLlmStatus,
     });
   }
 

@@ -4,12 +4,11 @@ declare const process: {
 };
 
 import { createHeuristicAgent, createFunctionAgent, GuandanArenaMatch } from './engine';
-import { createOpenRouterAgent, createOpenRouterRerankerAgent, OPENROUTER_DEFAULT_RERANKER_MODEL } from './openrouter';
-import { createDeviationMetric, mergeDeviationMetric, recordDeviationMetric, summarizeDeviationMetric, type DeviationMetric } from './deviationMetric';
+import { createOpenRouterAgent } from './openrouter';
 import type { AiProfile } from '../game/ai';
 import { createSeededRandom } from '../game/cards';
 import { createNewGame } from '../game/state';
-import type { ArenaChosenAction, GuandanArenaAgent } from './types';
+import type { GuandanArenaAgent } from './types';
 import type { Seat, Team } from '../game/types';
 import type { OpenRouterStatusEvent } from './openrouter';
 
@@ -24,8 +23,6 @@ interface OpenRouterTeamConfig {
   team: Team;
   seats: [Seat, Seat];
 }
-
-type OpenRouterAgentMode = 'openrouter' | 'llmreranker';
 
 interface RemoteDiagnostics {
   requestsStarted: number;
@@ -50,7 +47,6 @@ async function main(): Promise<void> {
   }
 
   const model = process.env.OPENROUTER_MODEL?.trim() || DEFAULT_MODEL;
-  const agentMode = parseOpenRouterAgentMode(process.env.OPENROUTER_AGENT_MODE);
   const baseUrl = process.env.OPENROUTER_BASE_URL?.trim() || DEFAULT_BASE_URL;
   const opponentProfile = parseOpponentProfile(process.env.OPENROUTER_OPPONENT_PROFILE);
   const opponentLabel = getOpponentLabel(opponentProfile);
@@ -71,12 +67,6 @@ async function main(): Promise<void> {
     1: createRemoteDiagnostics(),
     2: createRemoteDiagnostics(),
     3: createRemoteDiagnostics(),
-  };
-  const deviationMetricBySeat: Record<Seat, DeviationMetric> = {
-    0: createDeviationMetric(),
-    1: createDeviationMetric(),
-    2: createDeviationMetric(),
-    3: createDeviationMetric(),
   };
   const includeTrace = process.env.OUTPUT_TRACE === '1';
   const results: Array<{
@@ -103,14 +93,12 @@ async function main(): Promise<void> {
           baseUrl,
           matchIndex,
           model,
-          agentMode,
           opponentLabel,
           opponentProfile,
           strictRemote,
           timeoutMs,
           maxTokens,
           diagnosticsBySeat,
-          deviationMetricBySeat,
           usageBySeat,
         }),
         createMatchAgentForSeat(1, llmTeam, {
@@ -118,14 +106,12 @@ async function main(): Promise<void> {
           baseUrl,
           matchIndex,
           model,
-          agentMode,
           opponentLabel,
           opponentProfile,
           strictRemote,
           timeoutMs,
           maxTokens,
           diagnosticsBySeat,
-          deviationMetricBySeat,
           usageBySeat,
         }),
         createMatchAgentForSeat(2, llmTeam, {
@@ -133,14 +119,12 @@ async function main(): Promise<void> {
           baseUrl,
           matchIndex,
           model,
-          agentMode,
           opponentLabel,
           opponentProfile,
           strictRemote,
           timeoutMs,
           maxTokens,
           diagnosticsBySeat,
-          deviationMetricBySeat,
           usageBySeat,
         }),
         createMatchAgentForSeat(3, llmTeam, {
@@ -148,14 +132,12 @@ async function main(): Promise<void> {
           baseUrl,
           matchIndex,
           model,
-          agentMode,
           opponentLabel,
           opponentProfile,
           strictRemote,
           timeoutMs,
           maxTokens,
           diagnosticsBySeat,
-          deviationMetricBySeat,
           usageBySeat,
         }),
       ],
@@ -192,16 +174,11 @@ async function main(): Promise<void> {
     (current, seat) => mergeRemoteDiagnostics(current, diagnosticsBySeat[seat]),
     createRemoteDiagnostics(),
   );
-  const totalDeviationMetric = ALL_SEATS.reduce<DeviationMetric>(
-    (current, seat) => mergeDeviationMetric(current, deviationMetricBySeat[seat]),
-    createDeviationMetric(),
-  );
 
   console.log(
     JSON.stringify(
       {
         model,
-        agentMode,
         opponentProfile,
         matches,
         baseSeed,
@@ -241,16 +218,6 @@ async function main(): Promise<void> {
           seat3: diagnosticsBySeat[3],
           total: totalDiagnostics,
         },
-        deviation_metric:
-          agentMode === 'llmreranker'
-            ? {
-                seat0: summarizeDeviationMetric(deviationMetricBySeat[0]),
-                seat1: summarizeDeviationMetric(deviationMetricBySeat[1]),
-                seat2: summarizeDeviationMetric(deviationMetricBySeat[2]),
-                seat3: summarizeDeviationMetric(deviationMetricBySeat[3]),
-                total: summarizeDeviationMetric(totalDeviationMetric),
-              }
-            : null,
         matchResults: results,
         actionHistory: includeTrace
           ? lastResultState.actionHistory.map((entry) => ({
@@ -293,14 +260,6 @@ function parseOpenRouterTeam(raw: string | undefined): OpenRouterTeamConfig {
   };
 }
 
-function parseOpenRouterAgentMode(raw: string | undefined): OpenRouterAgentMode {
-  if (raw === 'llmreranker') {
-    return 'llmreranker';
-  }
-
-  return 'openrouter';
-}
-
 function parseOpponentProfile(raw: string | undefined): AiProfile {
   if (raw === 'baseline' || raw === 'legacy-v1' || raw === 'legacy-vR' || raw === 'balanced-v2') {
     return raw;
@@ -327,9 +286,6 @@ function getOpponentLabel(profile: AiProfile): string {
   if (profile.startsWith('legacy-v3.')) {
     return `Legacy ${profile.replace('legacy-', '')}`;
   }
-  if (profile === 'legacy-v2.2') {
-    return 'Legacy v2.2';
-  }
   if (profile === 'legacy-vR') {
     return 'Legacy vR';
   }
@@ -347,56 +303,16 @@ function createMatchAgentForSeat(
     baseUrl: string;
     matchIndex: number;
     model: string;
-    agentMode: OpenRouterAgentMode;
     opponentLabel: string;
     opponentProfile: AiProfile;
     strictRemote: boolean;
     timeoutMs: number;
     maxTokens: number;
     diagnosticsBySeat: Record<Seat, RemoteDiagnostics>;
-    deviationMetricBySeat: Record<Seat, DeviationMetric>;
     usageBySeat: Record<Seat, UsageAccumulator>;
   },
 ): GuandanArenaAgent {
   if (llmTeam.seats.includes(seat)) {
-    if (config.agentMode === 'llmreranker') {
-      const diagnostics = config.diagnosticsBySeat[seat];
-      const turnFailures: string[] = [];
-      const rerankerAgent = createOpenRouterRerankerAgent({
-        id: `llmreranker-seat-${seat}`,
-        label: `Seat ${seat} LLM Reranker`,
-        apiKey: config.apiKey,
-        baseUrl: config.baseUrl,
-        model: config.model || OPENROUTER_DEFAULT_RERANKER_MODEL,
-        seat,
-        timeoutMs: config.timeoutMs,
-        maxTokens: config.maxTokens,
-        onRerankDecision(event) {
-          recordDeviationMetric(config.deviationMetricBySeat[seat], event);
-        },
-        onStatus(event) {
-          recordStatusEvent(diagnostics, event);
-          if (event.code === 'fallback') {
-            turnFailures.push(event.message);
-          }
-        },
-      });
-
-      return createFunctionAgent({
-        id: `llmreranker-headless-seat-${seat}`,
-        label: `Seat ${seat} LLM Reranker`,
-        async decideTurn(input, context) {
-          turnFailures.length = 0;
-          const action = await rerankerAgent.decideTurn(input, context);
-          if (config.strictRemote && turnFailures.length > 0) {
-            throw new Error(`Strict remote mode blocked fallback: ${turnFailures[0]}`);
-          }
-
-          return action;
-        },
-      });
-    }
-
     return createTrackedOpenRouterAgent({
       apiKey: config.apiKey,
       baseUrl: config.baseUrl,
@@ -573,14 +489,6 @@ function addDiagnosticSample(target: RemoteDiagnostics, message: string): void {
   }
 
   target.sampleErrors.push(message);
-}
-
-function getErrorMessage(error: unknown): string {
-  if (error instanceof Error) {
-    return error.message;
-  }
-
-  return 'Unknown error';
 }
 
 function truncate(text: string, maxLength: number = 320): string {

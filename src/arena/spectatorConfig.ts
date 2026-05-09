@@ -1,5 +1,5 @@
 import type { Seat } from '../game/types';
-import { OPENROUTER_DEFAULT_BASE_URL, OPENROUTER_DEFAULT_RERANKER_MODEL } from './openrouter';
+import { OPENROUTER_DEFAULT_BASE_URL } from './openrouter';
 
 export const LOCAL_STORAGE_KEY = 'guandan-openrouter-spectator-v1';
 
@@ -10,8 +10,7 @@ export type SeatAgentMode =
   | 'builtin-legacy-vR'
   | 'builtin-balanced-v2'
   | 'scorenet-ppo'
-  | 'openrouter'
-  | 'llmreranker';
+  | 'openrouter';
 export type SpectatorSeatConfigMap = Record<Seat, SpectatorSeatConfig>;
 
 export interface SpectatorGlobalConfig {
@@ -38,8 +37,8 @@ export interface OpenRouterModelOption {
 
 export const AVAILABLE_OPENROUTER_MODELS: OpenRouterModelOption[] = [
   {
-    value: 'moonshotai/kimi-k2.5',
-    label: 'Kimi K2.5',
+    value: 'deepseek/deepseek-chat-v3-0324',
+    label: 'DeepSeek Chat V3 0324',
   },
   {
     value: 'moonshotai/kimi-k2.6',
@@ -48,14 +47,6 @@ export const AVAILABLE_OPENROUTER_MODELS: OpenRouterModelOption[] = [
   {
     value: 'google/gemma-4-26b-a4b-it',
     label: 'Gemma 4 26B A4B Instruct',
-  },
-  {
-    value: 'deepseek/deepseek-chat-v3-0324',
-    label: 'DeepSeek Chat V3 0324',
-  },
-  {
-    value: 'tencent/hy3-preview:free',
-    label: 'Tencent HY3 Preview (free)',
   },
 ];
 
@@ -114,7 +105,7 @@ export function persistSpectatorConfig(config: SpectatorArenaConfig): void {
 
 export function validateSpectatorConfig(config: SpectatorArenaConfig): string | null {
   const openRouterSeats = ([0, 1, 2, 3] as const).filter((seat) =>
-    config.seatConfigs[seat].mode === 'openrouter' || config.seatConfigs[seat].mode === 'llmreranker',
+    config.seatConfigs[seat].mode === 'openrouter',
   );
 
   if (openRouterSeats.length === 0) {
@@ -127,7 +118,7 @@ export function validateSpectatorConfig(config: SpectatorArenaConfig): string | 
 
   for (const seat of openRouterSeats) {
     const seatConfig = config.seatConfigs[seat];
-    if (seatConfig.mode === 'openrouter' && !seatConfig.model.trim()) {
+    if (!seatConfig.model.trim()) {
       return `Seat ${seat} 还没有填写 model。`;
     }
 
@@ -188,10 +179,6 @@ export function getSeatDisplayLabel(config: SpectatorSeatConfig): string {
     return config.label || 'Latest PPO ScoreNet';
   }
 
-  if (config.mode === 'llmreranker') {
-    return config.label || 'LLM Reranker';
-  }
-
   return config.label || getOpenRouterModelLabel(config.model) || 'OpenRouter LLM';
 }
 
@@ -220,10 +207,6 @@ export function getSeatSubtitle(config: SpectatorSeatConfig): string {
     return `${getSeatDisplayLabel(config)} · learned policy`;
   }
 
-  if (config.mode === 'llmreranker') {
-    return `${getSeatDisplayLabel(config)} · ${getOpenRouterModelLabel(config.model || OPENROUTER_DEFAULT_RERANKER_MODEL)}`;
-  }
-
   return `${getSeatDisplayLabel(config)} · ${getOpenRouterModelLabel(config.model) || '未设模型'}`;
 }
 
@@ -242,8 +225,16 @@ function getOpenRouterModelLabel(model: string): string {
   return AVAILABLE_OPENROUTER_MODELS.find((option) => option.value === model)?.label ?? model;
 }
 
-function normalizeSeatMode(mode: SpectatorSeatConfig['mode'] | 'builtin' | 'builtin-strong'): SeatAgentMode {
-  if (mode === 'builtin' || mode === 'builtin-strong' || mode === 'builtin-legacy-v1' || mode === 'builtin-legacy-vR' || mode === 'builtin-baseline' || mode === 'builtin-balanced-v2' || mode === 'llmreranker') {
+function normalizeSeatMode(mode: SpectatorSeatConfig['mode'] | 'builtin' | 'builtin-strong' | 'llmreranker'): SeatAgentMode {
+  if (
+    mode === 'builtin'
+    || mode === 'builtin-strong'
+    || mode === 'builtin-legacy-v1'
+    || mode === 'builtin-legacy-vR'
+    || mode === 'builtin-baseline'
+    || mode === 'builtin-balanced-v2'
+    || mode === 'llmreranker'
+  ) {
     return 'builtin-legacy-v3';
   }
 

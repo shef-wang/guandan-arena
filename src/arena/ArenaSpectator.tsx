@@ -5,7 +5,6 @@ import GameTableScene from '../table/GameTableScene';
 import { PlayingCard, formatPlacementKey } from '../ui/tableWidgets';
 import { formatTurnInputAsPrompt, GuandanArenaMatch } from './index';
 import {
-  OPENROUTER_DEFAULT_RERANKER_MODEL,
   type OpenRouterStatusCode,
   type OpenRouterStatusEvent,
 } from './openrouter';
@@ -567,15 +566,11 @@ function getSeatModeSummary(config: SpectatorSeatConfig): string {
     return 'ScoreNet PPO learned policy';
   }
 
-  if (config.mode === 'llmreranker') {
-    return `LLM reranker · ${getSeatLlmModelLabel(config)}`;
-  }
-
   return getSeatLlmModelLabel(config);
 }
 
 function usesRemoteModel(config: SpectatorSeatConfig): boolean {
-  return config.mode === 'openrouter' || config.mode === 'llmreranker';
+  return config.mode === 'openrouter';
 }
 
 function getLlmStatusLabel(code: OpenRouterStatusCode): string {
@@ -619,10 +614,6 @@ function formatStatusTimestamp(timestamp: number): string {
 }
 
 function getSeatLlmModelLabel(config: SpectatorSeatConfig): string {
-  if (config.mode === 'llmreranker') {
-    return config.model || OPENROUTER_DEFAULT_RERANKER_MODEL;
-  }
-
   return config.model || '未设模型';
 }
 

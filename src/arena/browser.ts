@@ -10,7 +10,7 @@ import {
   parseArenaChosenAction,
   validateArenaChosenAction,
 } from './engine';
-import { createOpenRouterAgent, createOpenRouterRerankerAgent } from './openrouter';
+import { createOpenRouterAgent } from './openrouter';
 import type { GameState, Seat } from '../game/types';
 import { formatTurnInputAsPrompt } from './prompt';
 import type { ArenaChosenAction, ArenaMatchConfig, GuandanArenaAgent } from './types';
@@ -22,7 +22,6 @@ export interface BrowserGuandanArenaApi {
   createHeuristicAgent: typeof createHeuristicAgent;
   createPromptAgent: typeof createPromptAgent;
   createOpenRouterAgent: typeof createOpenRouterAgent;
-  createOpenRouterRerankerAgent: typeof createOpenRouterRerankerAgent;
   createMatch: (config: ArenaMatchConfig) => GuandanArenaMatch;
   formatTurnInputAsPrompt: typeof formatTurnInputAsPrompt;
   buildTurnInput: typeof buildArenaTurnInput;
@@ -56,7 +55,6 @@ export function installGuandanArenaBridge(): void {
     createHeuristicAgent,
     createPromptAgent,
     createOpenRouterAgent,
-    createOpenRouterRerankerAgent,
     createMatch(config: ArenaMatchConfig) {
       return new GuandanArenaMatch(config);
     },

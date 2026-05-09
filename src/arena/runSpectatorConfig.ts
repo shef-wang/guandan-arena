@@ -284,7 +284,7 @@ function mergeSeatCounters(results: MatchSummary[]): Record<Seat, SeatCounters> 
 }
 
 function isRemoteSeat(config: SpectatorSeatConfig): boolean {
-  return config.mode === 'openrouter' || config.mode === 'llmreranker';
+  return config.mode === 'openrouter';
 }
 
 function summarizeSeatConfig(config: SpectatorSeatConfig): Pick<SpectatorSeatConfig, 'mode' | 'model' | 'label'> {
