@@ -4,11 +4,8 @@ import { OPENROUTER_DEFAULT_BASE_URL } from './openrouter';
 export const LOCAL_STORAGE_KEY = 'guandan-openrouter-spectator-v1';
 
 export type SeatAgentMode =
-  | 'builtin-baseline'
   | 'builtin-legacy-v1'
   | 'builtin-legacy-v3'
-  | 'builtin-legacy-vR'
-  | 'builtin-balanced-v2'
   | 'scorenet-ppo'
   | 'openrouter';
 export type SpectatorSeatConfigMap = Record<Seat, SpectatorSeatConfig>;
@@ -155,24 +152,12 @@ export function getSeatTitle(seat: Seat): string {
 }
 
 export function getSeatDisplayLabel(config: SpectatorSeatConfig): string {
-  if (config.mode === 'builtin-balanced-v2') {
-    return config.label || 'guandan-ai v2 balanced';
-  }
-
-  if (config.mode === 'builtin-legacy-vR') {
-    return config.label || 'guandan-ai vR';
-  }
-
   if (config.mode === 'builtin-legacy-v3') {
     return config.label || 'legacy v3';
   }
 
   if (config.mode === 'builtin-legacy-v1') {
-    return config.label || 'guandan-ai v1';
-  }
-
-  if (config.mode === 'builtin-baseline') {
-    return config.label || '基础内置 heuristic';
+    return config.label || 'legacy v1';
   }
 
   if (config.mode === 'scorenet-ppo') {
@@ -183,24 +168,12 @@ export function getSeatDisplayLabel(config: SpectatorSeatConfig): string {
 }
 
 export function getSeatSubtitle(config: SpectatorSeatConfig): string {
-  if (config.mode === 'builtin-balanced-v2') {
-    return `${getSeatDisplayLabel(config)} · balanced`;
-  }
-
-  if (config.mode === 'builtin-legacy-vR') {
-    return `${getSeatDisplayLabel(config)} · weighted top-5`;
-  }
-
   if (config.mode === 'builtin-legacy-v3') {
     return `${getSeatDisplayLabel(config)} · policy ensemble`;
   }
 
   if (config.mode === 'builtin-legacy-v1') {
-    return `${getSeatDisplayLabel(config)} · legacy`;
-  }
-
-  if (config.mode === 'builtin-baseline') {
-    return `${getSeatDisplayLabel(config)} · 基础启发式`;
+    return `${getSeatDisplayLabel(config)} · heuristic`;
   }
 
   if (config.mode === 'scorenet-ppo') {
@@ -225,11 +198,19 @@ function getOpenRouterModelLabel(model: string): string {
   return AVAILABLE_OPENROUTER_MODELS.find((option) => option.value === model)?.label ?? model;
 }
 
-function normalizeSeatMode(mode: SpectatorSeatConfig['mode'] | 'builtin' | 'builtin-strong' | 'llmreranker'): SeatAgentMode {
+function normalizeSeatMode(
+  mode:
+    | SpectatorSeatConfig['mode']
+    | 'builtin'
+    | 'builtin-strong'
+    | 'builtin-baseline'
+    | 'builtin-legacy-vR'
+    | 'builtin-balanced-v2'
+    | 'llmreranker',
+): SeatAgentMode {
   if (
     mode === 'builtin'
     || mode === 'builtin-strong'
-    || mode === 'builtin-legacy-v1'
     || mode === 'builtin-legacy-vR'
     || mode === 'builtin-baseline'
     || mode === 'builtin-balanced-v2'

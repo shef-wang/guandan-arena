@@ -542,24 +542,12 @@ function getErrorMessage(error: unknown): string {
 }
 
 function getSeatModeSummary(config: SpectatorSeatConfig): string {
-  if (config.mode === 'builtin-balanced-v2') {
-    return 'guandan-ai v2 balanced';
-  }
-
-  if (config.mode === 'builtin-legacy-vR') {
-    return 'guandan-ai vR';
-  }
-
   if (config.mode === 'builtin-legacy-v3') {
     return 'legacy v3';
   }
 
   if (config.mode === 'builtin-legacy-v1') {
-    return 'guandan-ai v1 legacy';
-  }
-
-  if (config.mode === 'builtin-baseline') {
-    return '基础内置 heuristic';
+    return 'legacy v1';
   }
 
   if (config.mode === 'scorenet-ppo') {

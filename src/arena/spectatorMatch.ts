@@ -36,22 +36,6 @@ export function resolveSpectatorSeatAgent(
     siteUrl?: string;
   },
 ) {
-  if (seatConfig.mode === 'builtin-balanced-v2') {
-    return createHeuristicAgent({
-      id: `builtin-balanced-seat-${seat}`,
-      label: seatConfig.label || `Seat ${seat} Balanced`,
-      profile: 'balanced-v2',
-    });
-  }
-
-  if (seatConfig.mode === 'builtin-legacy-vR') {
-    return createHeuristicAgent({
-      id: `builtin-legacy-vr-seat-${seat}`,
-      label: seatConfig.label || `Seat ${seat} Legacy vR`,
-      profile: 'legacy-vR',
-    });
-  }
-
   if (seatConfig.mode === 'builtin-legacy-v3') {
     return createHeuristicAgent({
       id: `builtin-legacy-v3-seat-${seat}`,
@@ -65,14 +49,6 @@ export function resolveSpectatorSeatAgent(
       id: `builtin-legacy-seat-${seat}`,
       label: seatConfig.label || `Seat ${seat} Legacy`,
       profile: 'legacy-v1',
-    });
-  }
-
-  if (seatConfig.mode === 'builtin-baseline') {
-    return createHeuristicAgent({
-      id: `builtin-baseline-seat-${seat}`,
-      label: seatConfig.label || `Seat ${seat} Baseline`,
-      profile: 'baseline',
     });
   }
 
