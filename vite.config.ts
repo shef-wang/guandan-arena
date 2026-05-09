@@ -105,10 +105,11 @@ function readOpenRouterKeyFile(absolutePath: string): string {
 }
 
 /**
- * Copy onnxruntime-web's WASM glue into the static `public/ort/` directory so
- * the in-browser ScoreNet session can fetch them from a stable `/ort/` prefix
- * in both dev and production. Without this `onnxruntime-web` falls back to a
- * CDN path that doesn't exist for our deployment.
+ * Serve onnxruntime-web's WASM glue from `/ort/*`.
+ *
+ * In dev, files are streamed directly from `node_modules/onnxruntime-web/dist`
+ * through middleware (not from `/public`, which Vite blocks for module
+ * imports). In production builds, the same files are copied into `dist/ort/`.
  */
 function copyOnnxRuntimeAssets(): Plugin {
   // The package's `exports` map blocks `require.resolve('onnxruntime-web/package.json')`,
@@ -116,9 +117,7 @@ function copyOnnxRuntimeAssets(): Plugin {
   const distMjs = requireFromHere.resolve('onnxruntime-web');
   const ortPkgRoot = dirname(dirname(distMjs));
   const sourceDir = resolve(ortPkgRoot, 'dist');
-  const targetDir = resolve(__dirname, 'public/ort');
-
-  function syncOnce(): void {
+  function copyToTarget(targetDir: string): void {
     mkdirSync(targetDir, { recursive: true });
     for (const file of ORT_RUNTIME_FILES) {
       const source = resolve(sourceDir, file);
@@ -131,9 +130,35 @@ function copyOnnxRuntimeAssets(): Plugin {
 
   return {
     name: 'copy-onnxruntime-assets',
-    config() {
-      syncOnce();
-      return undefined;
+    configureServer(server: ViteDevServer) {
+      server.middlewares.use((req, res, next) => {
+        const pathname = req.url?.split('?')[0];
+        if (!pathname?.startsWith('/ort/')) {
+          next();
+          return;
+        }
+
+        const file = pathname.slice('/ort/'.length);
+        if (!ORT_RUNTIME_FILES.includes(file as (typeof ORT_RUNTIME_FILES)[number])) {
+          next();
+          return;
+        }
+
+        const source = resolve(sourceDir, file);
+        if (!existsSync(source)) {
+          res.statusCode = 404;
+          res.end('Not Found');
+          return;
+        }
+
+        const contentType = file.endsWith('.wasm') ? 'application/wasm' : 'text/javascript; charset=utf-8';
+        res.statusCode = 200;
+        res.setHeader('content-type', contentType);
+        res.end(readFileSync(source));
+      });
+    },
+    writeBundle() {
+      copyToTarget(resolve(__dirname, 'dist/ort'));
     },
   };
 }
